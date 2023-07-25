@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone};
 use lazy_static::lazy_static;
 use regex::Regex;
 
@@ -19,6 +20,10 @@ pub enum Token {
     Integer(i64),
     Float(f64),
     Bool(bool),
+    DateTime(DateTime<FixedOffset>),
+    DateTimeLocal(NaiveDateTime),
+    DateLocal(NaiveDate),
+    TimeLocal(NaiveTime),
 }
 
 lazy_static! {
@@ -47,6 +52,10 @@ lazy_static! {
         Regex::new("^(?:\\+|-)?inf").expect("float inf re should be valid");
     static ref TRUE_RE: Regex = Regex::new("^true(?:$|\\s)").expect("true re should be valid");
     static ref FALSE_RE: Regex = Regex::new("^false(?:$|\\s)").expect("false re should be valid");
+    static ref DATE_TIME_RE: Regex = Regex::new("^((?:(\\d{4}-\\d{2}-\\d{2})[T ](\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?))(Z|[\\+-]\\d{2}:\\d{2}))").expect("date time re should be valid");
+    static ref DATE_TIME_LOCAL_RE: Regex = Regex::new("^((?:(\\d{4}-\\d{2}-\\d{2})[T ](\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?)))").expect("date time local re should be valid");
+    static ref DATE_LOCAL_RE: Regex = Regex::new("^((?:(\\d{4}-\\d{2}-\\d{2})))").expect("date local re should be valid");
+    static ref TIME_LOCAL_RE: Regex = Regex::new("^((?:(\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?)))").expect("time local re should be valid");
 }
 
 #[derive(Clone)]
@@ -118,6 +127,35 @@ impl<'a> Lexer<'a> {
             let str = &self.text[self.pos + 1..self.pos + len - 1];
             self.pos += len;
             return Ok(Some(Token::String(str.into())));
+        }
+
+        if let Some(len) = self.scan_date_time() {
+            let dt = &self.text[self.pos..self.pos + len];
+            let dt = DateTime::parse_from_rfc3339(dt).map_err(|_| Error::Parse)?;
+            self.pos += len;
+            return Ok(Some(Token::DateTime(dt)));
+        }
+
+        if let Some(len) = self.scan_date_time_local() {
+            let dt = &self.text[self.pos..self.pos + len];
+            let dt =
+                NaiveDateTime::parse_from_str(dt, "%Y-%m-%dT%H:%M:%S").map_err(|_| Error::Parse)?;
+            self.pos += len;
+            return Ok(Some(Token::DateTimeLocal(dt)));
+        }
+
+        if let Some(len) = self.scan_date_local() {
+            let dt = &self.text[self.pos..self.pos + len];
+            let dt = NaiveDate::parse_from_str(dt, "%Y-%m-%d").map_err(|_| Error::Parse)?;
+            self.pos += len;
+            return Ok(Some(Token::DateLocal(dt)));
+        }
+
+        if let Some(len) = self.scan_time_local() {
+            let dt = &self.text[self.pos..self.pos + len];
+            let dt = NaiveTime::parse_from_str(dt, "%H:%M:%S").map_err(|_| Error::Parse)?;
+            self.pos += len;
+            return Ok(Some(Token::TimeLocal(dt)));
         }
 
         if let Some(len) = self.scan_float() {
@@ -291,10 +329,40 @@ impl<'a> Lexer<'a> {
             None => None,
         }
     }
+
+    fn scan_date_time(&self) -> Option<usize> {
+        match DATE_TIME_RE.captures(&self.text[self.pos..]) {
+            Some(cap) => Some(cap.get(0).unwrap().len()),
+            None => None,
+        }
+    }
+
+    fn scan_date_time_local(&self) -> Option<usize> {
+        match DATE_TIME_LOCAL_RE.captures(&self.text[self.pos..]) {
+            Some(cap) => Some(cap.get(0).unwrap().len()),
+            None => None,
+        }
+    }
+
+    fn scan_date_local(&self) -> Option<usize> {
+        match DATE_LOCAL_RE.captures(&self.text[self.pos..]) {
+            Some(cap) => Some(cap.get(0).unwrap().len()),
+            None => None,
+        }
+    }
+
+    fn scan_time_local(&self) -> Option<usize> {
+        match TIME_LOCAL_RE.captures(&self.text[self.pos..]) {
+            Some(cap) => Some(cap.get(0).unwrap().len()),
+            None => None,
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
+    use chrono::{FixedOffset, NaiveDate, NaiveTime, TimeZone};
+
     use crate::{
         error::{Error, Result},
         lexer::{Context, Lexer, Posture, Token},
@@ -588,6 +656,56 @@ mod tests {
         let mut context = Context::default();
         context.posture = Some(Posture::Value);
         assert_eq!(lexer.next(context)?, Some(Token::Bool(false)));
+        Ok(())
+    }
+
+    #[test]
+    fn date_time_offset() -> Result<()> {
+        let text = "1979-05-27T07:32:00Z";
+        let mut lexer = Lexer::new(text);
+        let mut context = Context::default();
+        context.posture = Some(Posture::Value);
+        let dt = FixedOffset::west_opt(0)
+            .unwrap()
+            .with_ymd_and_hms(1979, 05, 27, 07, 32, 00)
+            .unwrap();
+        assert_eq!(lexer.next(context)?, Some(Token::DateTime(dt)));
+        Ok(())
+    }
+
+    #[test]
+    fn date_time_local() -> Result<()> {
+        let text = "1979-05-27T07:32:00";
+        let mut lexer = Lexer::new(text);
+        let mut context = Context::default();
+        context.posture = Some(Posture::Value);
+        let dt = NaiveDate::from_ymd_opt(1979, 05, 27)
+            .unwrap()
+            .and_hms_opt(07, 32, 00)
+            .unwrap();
+        assert_eq!(lexer.next(context)?, Some(Token::DateTimeLocal(dt)));
+        Ok(())
+    }
+
+    #[test]
+    fn date_local() -> Result<()> {
+        let text = "1979-05-27";
+        let mut lexer = Lexer::new(text);
+        let mut context = Context::default();
+        context.posture = Some(Posture::Value);
+        let dt = NaiveDate::from_ymd_opt(1979, 05, 27).unwrap();
+        assert_eq!(lexer.next(context)?, Some(Token::DateLocal(dt)));
+        Ok(())
+    }
+
+    #[test]
+    fn time_local() -> Result<()> {
+        let text = "07:32:00";
+        let mut lexer = Lexer::new(text);
+        let mut context = Context::default();
+        context.posture = Some(Posture::Value);
+        let dt = NaiveTime::from_hms_opt(07, 32, 00).unwrap();
+        assert_eq!(lexer.next(context)?, Some(Token::TimeLocal(dt)));
         Ok(())
     }
 }
