@@ -17,6 +17,7 @@ pub enum Token {
     RightBracket,
     String(String),
     Integer(i64),
+    Float(f64),
     Bool(bool),
 }
 
@@ -40,16 +41,21 @@ lazy_static! {
         Regex::new("^0o[0-7](?:_?[0-7])*").expect("integer octal re should be valid");
     static ref INTEGER_BINARY_RE: Regex =
         Regex::new("^0b[0-1](?:_?[0-1])*").expect("integer binary re should be valid");
+    static ref FLOAT_RE: Regex =
+        Regex::new("^(?:\\+|-)?(?:0|[1-9](?:_?[0-9])*)(\\.[0-9](?:_?[0-9])*)?([eE](?:\\+|-)?(?:0|[1-9](?:_?[0-9])*))?").expect("float re should be valid");
+    static ref FLOAT_INF_RE: Regex =
+        Regex::new("^(?:\\+|-)?inf").expect("float inf re should be valid");
     static ref TRUE_RE: Regex = Regex::new("^true(?:$|\\s)").expect("true re should be valid");
     static ref FALSE_RE: Regex = Regex::new("^false(?:$|\\s)").expect("false re should be valid");
 }
 
+#[derive(Clone)]
 pub enum Posture {
     Key,
     Value,
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct Context {
     posture: Option<Posture>,
 }
@@ -112,6 +118,13 @@ impl<'a> Lexer<'a> {
             let str = &self.text[self.pos + 1..self.pos + len - 1];
             self.pos += len;
             return Ok(Some(Token::String(str.into())));
+        }
+
+        if let Some(len) = self.scan_float() {
+            let float = &self.text[self.pos..self.pos + len].replace("_", "");
+            let float = float.parse::<f64>().map_err(|_| Error::Parse)?;
+            self.pos += len;
+            return Ok(Some(Token::Float(float)));
         }
 
         if let Some(len) = self.scan_integer_hex() {
@@ -245,6 +258,24 @@ impl<'a> Lexer<'a> {
             Some(cap) => Some(cap.get(0).unwrap().len()),
             None => None,
         }
+    }
+
+    fn scan_float(&self) -> Option<usize> {
+        let text = &self.text[self.pos..];
+
+        if let Some(cap) = FLOAT_RE.captures(text) {
+            if let Some(_) = cap.get(1) {
+                return Some(cap.get(0).unwrap().len());
+            } else if let Some(_) = cap.get(2) {
+                return Some(cap.get(0).unwrap().len());
+            }
+        }
+
+        if let Some(cap) = FLOAT_INF_RE.captures(text) {
+            return Some(cap.get(0).unwrap().len());
+        }
+
+        None
     }
 
     fn scan_true(&self) -> Option<usize> {
@@ -489,6 +520,54 @@ mod tests {
         let mut context = Context::default();
         context.posture = Some(Posture::Value);
         assert_eq!(lexer.next(context)?, Some(Token::Integer(214)));
+        Ok(())
+    }
+
+    #[test]
+    fn float() -> Result<()> {
+        let text = "+1.0";
+        let mut lexer = Lexer::new(text);
+        let mut context = Context::default();
+        context.posture = Some(Posture::Value);
+        assert_eq!(lexer.next(context)?, Some(Token::Float(1.0)));
+        Ok(())
+    }
+
+    #[test]
+    fn float_exp() -> Result<()> {
+        let text = "6.26e-34";
+        let mut lexer = Lexer::new(text);
+        let mut context = Context::default();
+        context.posture = Some(Posture::Value);
+        assert_eq!(lexer.next(context)?, Some(Token::Float(6.26e-34)));
+        Ok(())
+    }
+
+    #[test]
+    fn float_underscore() -> Result<()> {
+        let text = "224_617.445_991_228";
+        let mut lexer = Lexer::new(text);
+        let mut context = Context::default();
+        context.posture = Some(Posture::Value);
+        assert_eq!(lexer.next(context)?, Some(Token::Float(224617.445991228)));
+        Ok(())
+    }
+
+    #[test]
+    fn float_inf() -> Result<()> {
+        let text = "inf +inf -inf";
+        let mut lexer = Lexer::new(text);
+        let mut context = Context::default();
+        context.posture = Some(Posture::Value);
+        assert_eq!(
+            lexer.next(context.clone())?,
+            Some(Token::Float(f64::INFINITY))
+        );
+        assert_eq!(
+            lexer.next(context.clone())?,
+            Some(Token::Float(f64::INFINITY))
+        );
+        assert_eq!(lexer.next(context)?, Some(Token::Float(f64::NEG_INFINITY)));
         Ok(())
     }
 
