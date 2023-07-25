@@ -17,6 +17,7 @@ pub enum Token {
     RightBracket,
     String(String),
     Integer(i64),
+    Bool(bool),
 }
 
 lazy_static! {
@@ -39,6 +40,8 @@ lazy_static! {
         Regex::new("^0o[0-7](?:_?[0-7])*").expect("integer octal re should be valid");
     static ref INTEGER_BINARY_RE: Regex =
         Regex::new("^0b[0-1](?:_?[0-1])*").expect("integer binary re should be valid");
+    static ref TRUE_RE: Regex = Regex::new("^true(?:$|\\s)").expect("true re should be valid");
+    static ref FALSE_RE: Regex = Regex::new("^false(?:$|\\s)").expect("false re should be valid");
 }
 
 pub enum Posture {
@@ -139,6 +142,16 @@ impl<'a> Lexer<'a> {
             return Ok(Some(Token::Integer(int)));
         }
 
+        if let Some(len) = self.scan_true() {
+            self.pos += len;
+            return Ok(Some(Token::Bool(true)));
+        }
+
+        if let Some(len) = self.scan_false() {
+            self.pos += len;
+            return Ok(Some(Token::Bool(false)));
+        }
+
         Err(Error::Parse)
     }
 
@@ -230,6 +243,20 @@ impl<'a> Lexer<'a> {
     fn scan_integer_binary(&self) -> Option<usize> {
         match INTEGER_BINARY_RE.captures(&self.text[self.pos..]) {
             Some(cap) => Some(cap.get(0).unwrap().len()),
+            None => None,
+        }
+    }
+
+    fn scan_true(&self) -> Option<usize> {
+        match TRUE_RE.captures(&self.text[self.pos..]) {
+            Some(_) => Some(4),
+            None => None,
+        }
+    }
+
+    fn scan_false(&self) -> Option<usize> {
+        match FALSE_RE.captures(&self.text[self.pos..]) {
+            Some(_) => Some(5),
             None => None,
         }
     }
@@ -462,6 +489,26 @@ mod tests {
         let mut context = Context::default();
         context.posture = Some(Posture::Value);
         assert_eq!(lexer.next(context)?, Some(Token::Integer(214)));
+        Ok(())
+    }
+
+    #[test]
+    fn bool_true() -> Result<()> {
+        let text = "true";
+        let mut lexer = Lexer::new(text);
+        let mut context = Context::default();
+        context.posture = Some(Posture::Value);
+        assert_eq!(lexer.next(context)?, Some(Token::Bool(true)));
+        Ok(())
+    }
+
+    #[test]
+    fn bool_false() -> Result<()> {
+        let text = "false";
+        let mut lexer = Lexer::new(text);
+        let mut context = Context::default();
+        context.posture = Some(Posture::Value);
+        assert_eq!(lexer.next(context)?, Some(Token::Bool(false)));
         Ok(())
     }
 }
