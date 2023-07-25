@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Offset, TimeZone};
+use chrono::{DateTime, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime};
 use lazy_static::lazy_static;
 use regex::Regex;
 
@@ -12,6 +12,7 @@ pub enum Token {
     BareKey(String),
     Equal,
     Dot,
+    Comma,
     LeftBrace,
     RightBrace,
     LeftBracket,
@@ -231,6 +232,7 @@ impl<'a> Lexer<'a> {
             Some('}') => Some(Token::RightBrace),
             Some('[') => Some(Token::LeftBracket),
             Some(']') => Some(Token::RightBracket),
+            Some(',') => Some(Token::Comma),
             _ => None,
         }
     }
@@ -428,6 +430,15 @@ mod tests {
         let mut lexer = Lexer::new(text);
         let context = Context::default();
         assert_eq!(lexer.next(context)?, Some(Token::Dot));
+        Ok(())
+    }
+
+    #[test]
+    fn comma() -> Result<()> {
+        let text = ",";
+        let mut lexer = Lexer::new(text);
+        let context = Context::default();
+        assert_eq!(lexer.next(context)?, Some(Token::Comma));
         Ok(())
     }
 
