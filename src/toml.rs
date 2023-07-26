@@ -30,10 +30,31 @@ impl Value {
         }
     }
 
+    pub fn as_int(&self) -> i64 {
+        match self {
+            Value::Integer(int) => *int,
+            _ => panic!("not a int value"),
+        }
+    }
+
+    pub fn as_bool(&self) -> bool {
+        match self {
+            Value::Bool(bool) => *bool,
+            _ => panic!("not a bool value"),
+        }
+    }
+
     pub fn as_table(&self) -> &HashMap<String, Value> {
         match self {
             Value::Table(table) => table,
-            _ => panic!("not a string value"),
+            _ => panic!("not a table value"),
+        }
+    }
+
+    pub fn as_table_mut(&mut self) -> &mut HashMap<String, Value> {
+        match self {
+            Value::Table(table) => table,
+            _ => panic!("not a table value"),
         }
     }
 

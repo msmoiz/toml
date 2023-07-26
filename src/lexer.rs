@@ -67,7 +67,7 @@ pub enum Posture {
 
 #[derive(Default, Clone)]
 pub struct Context {
-    posture: Option<Posture>,
+    pub posture: Option<Posture>,
 }
 
 pub struct Lexer<'a> {

@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
-use crate::lexer::{Context, Lexer, Token};
+use crate::lexer::{Context, Lexer, Posture, Token};
 
 use crate::error::{Error, Result};
-use crate::toml::Value;
+use crate::toml::{Table, Value};
 
 pub struct Parser<'a> {
     lexer: Lexer<'a>,
@@ -37,14 +37,41 @@ impl<'a> Parser<'a> {
     }
 
     fn key_val(&mut self) -> Result<()> {
-        let key = match self.lexer.next(Context::default())? {
+        let mut table = &mut self.root;
+        let mut key = match self.lexer.next(Context::default())? {
             Some(Token::BareKey(key)) | Some(Token::String(key)) => key,
             _ => {
                 return Err(Error::Parse);
             }
         };
 
-        if self.root.as_table().contains_key(&key) {
+        // dotted keys
+        while let Some(Token::Dot) = self.lexer.peek(Context::default())? {
+            self.lexer.next(Context::default())?; // ignore dot
+            key = match self.lexer.next(Context::default())? {
+                Some(Token::BareKey(next_key)) | Some(Token::String(next_key)) => {
+                    table = if table.as_table().contains_key(&key) {
+                        if !matches!(table[&key], Value::Table(_)) {
+                            // prev key has already been defined as something
+                            // other than a table
+                            return Err(Error::Parse);
+                        }
+                        table.as_table_mut().get_mut(&key).unwrap()
+                    } else {
+                        table
+                            .as_table_mut()
+                            .insert(key.clone(), Value::Table(Table::new()));
+                        table.as_table_mut().get_mut(&key).unwrap()
+                    };
+                    next_key
+                }
+                _ => {
+                    return Err(Error::Parse);
+                }
+            };
+        }
+
+        if table.as_table().contains_key(&key) {
             // key may not be redefined
             return Err(Error::Parse);
         }
@@ -53,8 +80,28 @@ impl<'a> Parser<'a> {
             return Err(Error::Parse);
         };
 
-        let Some(Token::String(value)) = self.lexer.next(Context::default())? else {
-            return Err(Error::Parse);
+        let mut context = Context::default();
+        context.posture = Some(Posture::Value);
+        let value = match self.lexer.next(context)? {
+            Some(value) => match value {
+                Token::Newline
+                | Token::BareKey(_)
+                | Token::Equal
+                | Token::Dot
+                | Token::Comma
+                | Token::RightBrace
+                | Token::RightBracket => return Err(Error::Parse),
+                Token::String(x) => Value::String(x),
+                Token::Integer(x) => Value::Integer(x),
+                Token::Float(x) => Value::Float(x),
+                Token::Bool(x) => Value::Bool(x),
+                Token::DateTime(x) => Value::OffsetDateTime(x),
+                Token::DateTimeLocal(x) => Value::LocalDateTime(x),
+                Token::DateLocal(x) => Value::LocalDate(x),
+                Token::TimeLocal(x) => Value::LocalTime(x),
+                _ => todo!(),
+            },
+            None => return Err(Error::Parse),
         };
 
         match self.lexer.next(Context::default())? {
@@ -62,7 +109,7 @@ impl<'a> Parser<'a> {
             _ => return Err(Error::Parse),
         }
 
-        self.root.insert(key, Value::String(value));
+        table.insert(key, value);
 
         Ok(())
     }
