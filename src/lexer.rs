@@ -8,7 +8,7 @@ use crate::error::{Error, Result};
 
 #[derive(Debug, PartialEq)]
 pub enum Token {
-    Comment,
+    Newline,
     BareKey(String),
     Equal,
     Dot,
@@ -28,7 +28,7 @@ pub enum Token {
 }
 
 lazy_static! {
-    static ref COMMENT_RE: Regex = Regex::new("^#.*(?:\n|$)").expect("comment re should be valid");
+    static ref COMMENT_RE: Regex = Regex::new("^#.*(?:\r\n|\n|$)").expect("comment re should be valid");
     static ref BARE_KEY_RE: Regex =
         Regex::new("^[a-zA-Z0-9_-]+").expect("bare key re should be valid");
     static ref LITERAL_STR_RE: Regex =
@@ -84,13 +84,17 @@ impl<'a> Lexer<'a> {
         let len = self.scan_whitespace();
         self.pos += len;
 
+        if let Some(len) = self.scan_comment() {
+            self.pos += len;
+        }
+
         if self.pos == self.text.len() {
             return Ok(None);
         }
 
-        if let Some(len) = self.scan_comment() {
+        if let Some(len) = self.scan_newline() {
             self.pos += len;
-            return Ok(Some(Token::Comment));
+            return Ok(Some(Token::Newline));
         }
 
         if let Some(punct) = self.scan_punct() {
@@ -207,6 +211,13 @@ impl<'a> Lexer<'a> {
         Err(Error::Parse)
     }
 
+    pub fn peek(&mut self, context: Context) -> Result<Option<Token>> {
+        let start = self.pos;
+        let token = self.next(context);
+        self.pos = start;
+        token
+    }
+
     fn scan_whitespace(&self) -> usize {
         let mut len = 0;
         let mut ix = 0;
@@ -219,8 +230,28 @@ impl<'a> Lexer<'a> {
 
     fn scan_comment(&self) -> Option<usize> {
         match COMMENT_RE.captures(&self.text[self.pos..]) {
-            Some(cap) => Some(cap.get(0).unwrap().len()),
+            Some(cap) => {
+                let text = cap.get(0).unwrap();
+                if text.as_str().ends_with("\n") {
+                    Some(text.len() - 1)
+                } else if text.as_str().ends_with("\r\n") {
+                    Some(text.len() - 2)
+                } else {
+                    Some(text.len())
+                }
+            }
             None => None,
+        }
+    }
+
+    fn scan_newline(&self) -> Option<usize> {
+        let text = &self.text[self.pos..];
+        if let Some('\n') = text.chars().next() {
+            Some(1)
+        } else if text.starts_with("\r\n") {
+            Some(2)
+        } else {
+            None
         }
     }
 
@@ -389,20 +420,11 @@ mod tests {
     }
 
     #[test]
-    fn full_line_comment() -> Result<()> {
-        let text = "# This is a comment";
+    fn newline() -> Result<()> {
+        let text = "\n";
         let mut lexer = Lexer::new(text);
         let context = Context::default();
-        assert_eq!(lexer.next(context)?, Some(Token::Comment));
-        Ok(())
-    }
-
-    #[test]
-    fn inline_comment() -> Result<()> {
-        let text = "  # This is a comment at the end of a line";
-        let mut lexer = Lexer::new(text);
-        let context = Context::default();
-        assert_eq!(lexer.next(context)?, Some(Token::Comment));
+        assert_eq!(lexer.next(context)?, Some(Token::Newline));
         Ok(())
     }
 
