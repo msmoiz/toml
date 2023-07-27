@@ -170,15 +170,17 @@ impl<'a> Lexer<'a> {
 
         if let Some(len) = self.scan_date_time() {
             let dt = &self.text[self.pos..self.pos + len];
-            let dt = DateTime::parse_from_rfc3339(dt).map_err(|_| Error::Parse)?;
+            let dt = dt.replace(" ", "T");
+            let dt = DateTime::parse_from_rfc3339(&dt).map_err(|_| Error::Parse)?;
             self.pos += len;
             return Ok(Some(Token::DateTime(dt)));
         }
 
         if let Some(len) = self.scan_date_time_local() {
             let dt = &self.text[self.pos..self.pos + len];
-            let dt =
-                NaiveDateTime::parse_from_str(dt, "%Y-%m-%dT%H:%M:%S").map_err(|_| Error::Parse)?;
+            let dt = NaiveDateTime::parse_from_str(dt, "%Y-%m-%dT%H:%M:%S")
+                .or_else(|_| NaiveDateTime::parse_from_str(dt, "%Y-%m-%dT%H:%M:%S%.f"))
+                .map_err(|_| Error::Parse)?;
             self.pos += len;
             return Ok(Some(Token::DateTimeLocal(dt)));
         }
@@ -192,7 +194,7 @@ impl<'a> Lexer<'a> {
 
         if let Some(len) = self.scan_time_local() {
             let dt = &self.text[self.pos..self.pos + len];
-            let dt = NaiveTime::parse_from_str(dt, "%H:%M:%S").map_err(|_| Error::Parse)?;
+            let dt = NaiveTime::parse_from_str(dt, "%H:%M:%S%.f").map_err(|_| Error::Parse)?;
             self.pos += len;
             return Ok(Some(Token::TimeLocal(dt)));
         }

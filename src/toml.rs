@@ -51,6 +51,34 @@ impl Value {
         }
     }
 
+    pub fn as_offset_date_time(&self) -> DateTime<FixedOffset> {
+        match self {
+            Value::OffsetDateTime(x) => *x,
+            _ => panic!("wrong type"),
+        }
+    }
+
+    pub fn as_local_date_time(&self) -> NaiveDateTime {
+        match self {
+            Value::LocalDateTime(x) => *x,
+            _ => panic!("wrong type"),
+        }
+    }
+
+    pub fn as_local_date(&self) -> NaiveDate {
+        match self {
+            Value::LocalDate(x) => *x,
+            _ => panic!("wrong type"),
+        }
+    }
+
+    pub fn as_local_time(&self) -> NaiveTime {
+        match self {
+            Value::LocalTime(x) => *x,
+            _ => panic!("wrong type"),
+        }
+    }
+
     pub fn as_table(&self) -> &HashMap<String, Value> {
         match self {
             Value::Table(table) => table,
