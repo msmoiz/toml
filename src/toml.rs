@@ -37,6 +37,13 @@ impl Value {
         }
     }
 
+    pub fn as_float(&self) -> f64 {
+        match self {
+            Value::Float(float) => *float,
+            _ => panic!("not a float value"),
+        }
+    }
+
     pub fn as_bool(&self) -> bool {
         match self {
             Value::Bool(bool) => *bool,

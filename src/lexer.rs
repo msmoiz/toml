@@ -50,9 +50,11 @@ lazy_static! {
     static ref INTEGER_BINARY_RE: Regex =
         Regex::new("^0b[0-1](?:_?[0-1])*").expect("integer binary re should be valid");
     static ref FLOAT_RE: Regex =
-        Regex::new("^(?:\\+|-)?(?:0|[1-9](?:_?[0-9])*)(\\.[0-9](?:_?[0-9])*)?([eE](?:\\+|-)?(?:0|[1-9](?:_?[0-9])*))?").expect("float re should be valid");
+        Regex::new("^(?:\\+|-)?(?:0|[1-9](?:_?[0-9])*)(\\.[0-9](?:_?[0-9])*)?([eE](?:\\+|-)?(?:[0-9](?:_?[0-9])*))?").expect("float re should be valid");
     static ref FLOAT_INF_RE: Regex =
         Regex::new("^(?:\\+|-)?inf").expect("float inf re should be valid");
+    static ref FLOAT_NAN_RE: Regex =
+        Regex::new("^(?:\\+|-)?nan").expect("float nan re should be valid");
     static ref TRUE_RE: Regex = Regex::new("^true(?:$|\\s)").expect("true re should be valid");
     static ref FALSE_RE: Regex = Regex::new("^false(?:$|\\s)").expect("false re should be valid");
     static ref DATE_TIME_RE: Regex = Regex::new("^((?:(\\d{4}-\\d{2}-\\d{2})[T ](\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?))(Z|[\\+-]\\d{2}:\\d{2}))").expect("date time re should be valid");
@@ -375,6 +377,10 @@ impl<'a> Lexer<'a> {
         }
 
         if let Some(cap) = FLOAT_INF_RE.captures(text) {
+            return Some(cap.get(0).unwrap().len());
+        }
+
+        if let Some(cap) = FLOAT_NAN_RE.captures(text) {
             return Some(cap.get(0).unwrap().len());
         }
 
