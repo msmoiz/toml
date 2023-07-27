@@ -34,11 +34,13 @@ lazy_static! {
     static ref LITERAL_STR_RE: Regex =
         Regex::new("^'([^'\n]*)'").expect("literal str re should be valid");
     static ref MULTILINE_LITERAL_STR_RE: Regex =
-        Regex::new("^'''(?s)(.*)'''").expect("multiline literal str re should be valid");
+        Regex::new("^'{3}(?s)(.*?)'{3,}").expect("multiline literal str re should be valid");
     static ref BASIC_STR_RE: Regex =
-        Regex::new(r#"^"([^"\n]*)""#).expect("basic re should be valid");
+        Regex::new(r#"^"((?:[^"\\\n]|\\(?:[btnfr"\\]|u[0-9a-fA-F]{4}))*)""#).expect("basic re should be valid");
     static ref MULTILINE_BASIC_STR_RE: Regex =
         Regex::new(r#"^"""(?s)(.*)""""#).expect("multiline basic re should be valid");
+    static ref LINE_ENDING_SLASH: Regex =
+        Regex::new(r#"\\[ \t]*(?:\r\n|\n)[[:space:]]*"#).expect("line ending slash re should be valid");
     static ref INTEGER_RE: Regex =
         Regex::new("^(?:\\+|-)?(?:0|[1-9](_?[0-9])*)").expect("integer re should be valid");
     static ref INTEGER_HEX_RE: Regex =
@@ -112,18 +114,48 @@ impl<'a> Lexer<'a> {
 
         if let Some(len) = self.scan_multiline_basic_string() {
             let str = &self.text[self.pos + 3..self.pos + len - 3];
+            if Lexer::contains_three_consec_delims(&str) {
+                return Err(Error::Parse);
+            }
+            let str = if str.starts_with("\n") {
+                &str[1..]
+            } else {
+                str
+            };
+            let str = LINE_ENDING_SLASH.replace_all(&str, "");
+            let str = str
+                .replace("\\b", "\u{0008}")
+                .replace("\\t", "\t")
+                .replace("\\n", "\n")
+                .replace("\\f", "\u{000C}")
+                .replace("\\r", "\r")
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\");
             self.pos += len;
             return Ok(Some(Token::String(str.into())));
         }
 
         if let Some(len) = self.scan_basic_string() {
             let str = &self.text[self.pos + 1..self.pos + len - 1];
+            let str = str
+                .replace("\\b", "\u{0008}")
+                .replace("\\t", "\t")
+                .replace("\\n", "\n")
+                .replace("\\f", "\u{000C}")
+                .replace("\\r", "\r")
+                .replace("\\\"", "\"")
+                .replace("\\\\", "\\");
             self.pos += len;
             return Ok(Some(Token::String(str.into())));
         }
 
         if let Some(len) = self.scan_multiline_literal_string() {
             let str = &self.text[self.pos + 3..self.pos + len - 3];
+            let str = if str.starts_with("\n") {
+                &str[1..]
+            } else {
+                str
+            };
             self.pos += len;
             return Ok(Some(Token::String(str.into())));
         }
@@ -389,6 +421,32 @@ impl<'a> Lexer<'a> {
             Some(cap) => Some(cap.get(0).unwrap().len()),
             None => None,
         }
+    }
+
+    fn contains_three_consec_delims(text: &str) -> bool {
+        let mut count = 0;
+        let mut ix = 0;
+        while ix < text.len() {
+            if text[ix..].starts_with("\"") {
+                count += 1;
+                ix += 1;
+            } else if text[ix..].starts_with("\\\"") {
+                count = 0;
+                ix += 2;
+            } else {
+                count = 0;
+                ix += 1;
+            }
+            if count == 3 {
+                return true;
+            }
+        }
+
+        if count == 3 {
+            return true;
+        }
+
+        false
     }
 }
 
