@@ -21,15 +21,10 @@ pub enum Token {
     Integer(i64),
     Float(f64),
     Bool(bool),
-    DateTime(DateTime<FixedOffset>),
-    DateTimeLocal(NaiveDateTime),
-    DateLocal(NaiveDate),
-    TimeLocal(NaiveTime),
-}
-
-lazy_static! {
-    static ref LINE_ENDING_SLASH: Regex = Regex::new(r#"\\[ \t]*(?:\r\n|\n)[[:space:]]*"#)
-        .expect("line ending slash re should be valid");
+    OffsetDateTime(DateTime<FixedOffset>),
+    LocalDateTime(NaiveDateTime),
+    LocalDate(NaiveDate),
+    LocalTime(NaiveTime),
 }
 
 #[derive(Clone)]
@@ -65,151 +60,96 @@ impl<'a> Lexer<'a> {
             return Ok(None);
         }
 
-        if let Some((newline, len)) = self.scan_newline() {
+        if let Some((token, len)) = self.scan_newline() {
             self.pos += len;
-            return Ok(Some(newline));
+            return Ok(Some(token));
         }
 
-        if let Some(punct) = self.scan_punct() {
+        if let Some(token) = self.scan_punct() {
             self.pos += 1;
-            return Ok(Some(punct));
+            return Ok(Some(token));
         }
 
         if !matches!(context.posture, Some(Posture::Value)) {
-            if let Some((key, len)) = self.scan_bare_key() {
+            if let Some((token, len)) = self.scan_bare_key() {
                 self.pos += len;
-                return Ok(Some(key));
+                return Ok(Some(token));
             }
         }
 
-        if let Some(len) = self.scan_multiline_basic_string() {
-            let str = &self.text[self.pos + 3..self.pos + len - 3];
-            if Lexer::contains_three_consec_delims(&str) {
-                return Err(Error::Parse);
-            }
-            let str = if str.starts_with("\n") {
-                &str[1..]
-            } else {
-                str
-            };
-            let str = LINE_ENDING_SLASH.replace_all(&str, "");
-            let str = str
-                .replace("\\b", "\u{0008}")
-                .replace("\\t", "\t")
-                .replace("\\n", "\n")
-                .replace("\\f", "\u{000C}")
-                .replace("\\r", "\r")
-                .replace("\\\"", "\"")
-                .replace("\\\\", "\\");
+        if let Some((token, len)) = self.scan_multiline_basic_string() {
             self.pos += len;
-            return Ok(Some(Token::String(str.into())));
+            return Ok(Some(token));
         }
 
-        if let Some(len) = self.scan_basic_string() {
-            let str = &self.text[self.pos + 1..self.pos + len - 1];
-            let str = str
-                .replace("\\b", "\u{0008}")
-                .replace("\\t", "\t")
-                .replace("\\n", "\n")
-                .replace("\\f", "\u{000C}")
-                .replace("\\r", "\r")
-                .replace("\\\"", "\"")
-                .replace("\\\\", "\\");
+        if let Some((token, len)) = self.scan_basic_string() {
             self.pos += len;
-            return Ok(Some(Token::String(str.into())));
+            return Ok(Some(token));
         }
 
-        if let Some(len) = self.scan_multiline_literal_string() {
-            let str = &self.text[self.pos + 3..self.pos + len - 3];
-            let str = if str.starts_with("\n") {
-                &str[1..]
-            } else {
-                str
-            };
+        if let Some((token, len)) = self.scan_multiline_literal_string() {
             self.pos += len;
-            return Ok(Some(Token::String(str.into())));
+            return Ok(Some(token));
         }
 
-        if let Some(len) = self.scan_literal_string() {
-            let str = &self.text[self.pos + 1..self.pos + len - 1];
+        if let Some((token, len)) = self.scan_literal_string() {
             self.pos += len;
-            return Ok(Some(Token::String(str.into())));
+            return Ok(Some(token));
         }
 
-        if let Some(len) = self.scan_date_time() {
-            let dt = &self.text[self.pos..self.pos + len];
-            let dt = dt.replace(" ", "T");
-            let dt = DateTime::parse_from_rfc3339(&dt).map_err(|_| Error::Parse)?;
+        if let Some((token, len)) = self.scan_offset_date_time()? {
             self.pos += len;
-            return Ok(Some(Token::DateTime(dt)));
+            return Ok(Some(token));
         }
 
-        if let Some(len) = self.scan_date_time_local() {
-            let dt = &self.text[self.pos..self.pos + len];
-            let dt = NaiveDateTime::parse_from_str(dt, "%Y-%m-%dT%H:%M:%S")
-                .or_else(|_| NaiveDateTime::parse_from_str(dt, "%Y-%m-%dT%H:%M:%S%.f"))
-                .map_err(|_| Error::Parse)?;
+        if let Some((token, len)) = self.scan_local_date_time()? {
             self.pos += len;
-            return Ok(Some(Token::DateTimeLocal(dt)));
+            return Ok(Some(token));
         }
 
-        if let Some(len) = self.scan_date_local() {
-            let dt = &self.text[self.pos..self.pos + len];
-            let dt = NaiveDate::parse_from_str(dt, "%Y-%m-%d").map_err(|_| Error::Parse)?;
+        if let Some((token, len)) = self.scan_local_date()? {
             self.pos += len;
-            return Ok(Some(Token::DateLocal(dt)));
+            return Ok(Some(token));
         }
 
-        if let Some(len) = self.scan_time_local() {
-            let dt = &self.text[self.pos..self.pos + len];
-            let dt = NaiveTime::parse_from_str(dt, "%H:%M:%S%.f").map_err(|_| Error::Parse)?;
+        if let Some((token, len)) = self.scan_local_time()? {
             self.pos += len;
-            return Ok(Some(Token::TimeLocal(dt)));
+            return Ok(Some(token));
         }
 
-        if let Some(len) = self.scan_float() {
-            let float = &self.text[self.pos..self.pos + len].replace("_", "");
-            let float = float.parse::<f64>().map_err(|_| Error::Parse)?;
+        if let Some((token, len)) = self.scan_float()? {
             self.pos += len;
-            return Ok(Some(Token::Float(float)));
+            return Ok(Some(token));
         }
 
-        if let Some(len) = self.scan_integer_hex() {
-            let int = &self.text[self.pos + 2..self.pos + len].replace("_", "");
-            let int = i64::from_str_radix(int, 16).map_err(|_| Error::Parse)?;
+        if let Some((token, len)) = self.scan_integer_hex()? {
             self.pos += len;
-            return Ok(Some(Token::Integer(int)));
+            return Ok(Some(token));
         }
 
-        if let Some(len) = self.scan_integer_octal() {
-            let int = &self.text[self.pos + 2..self.pos + len].replace("_", "");
-            let int = i64::from_str_radix(int, 8).map_err(|_| Error::Parse)?;
+        if let Some((token, len)) = self.scan_integer_octal()? {
             self.pos += len;
-            return Ok(Some(Token::Integer(int)));
+            return Ok(Some(token));
         }
 
-        if let Some(len) = self.scan_integer_binary() {
-            let int = &self.text[self.pos + 2..self.pos + len].replace("_", "");
-            let int = i64::from_str_radix(int, 2).map_err(|_| Error::Parse)?;
+        if let Some((token, len)) = self.scan_integer_binary()? {
             self.pos += len;
-            return Ok(Some(Token::Integer(int)));
+            return Ok(Some(token));
         }
 
-        if let Some(len) = self.scan_integer() {
-            let int = &self.text[self.pos..self.pos + len].replace("_", "");
-            let int = int.parse::<i64>().map_err(|_| Error::Parse)?;
+        if let Some((token, len)) = self.scan_integer()? {
             self.pos += len;
-            return Ok(Some(Token::Integer(int)));
+            return Ok(Some(token));
         }
 
-        if let Some(len) = self.scan_true() {
+        if let Some((token, len)) = self.scan_true() {
             self.pos += len;
-            return Ok(Some(Token::Bool(true)));
+            return Ok(Some(token));
         }
 
-        if let Some(len) = self.scan_false() {
+        if let Some((token, len)) = self.scan_false() {
             self.pos += len;
-            return Ok(Some(Token::Bool(false)));
+            return Ok(Some(token));
         }
 
         Err(Error::Parse)
@@ -222,12 +162,15 @@ impl<'a> Lexer<'a> {
         token
     }
 
+    fn remainder(&self) -> &str {
+        &self.text[self.pos..]
+    }
+
     fn scan_whitespace(&self) -> usize {
         let mut len = 0;
-        let mut ix = 0;
-        while let Some(' ') | Some('\t') = &self.text[self.pos + ix..].chars().next() {
+        let mut chars = self.remainder().chars();
+        while let Some(' ') | Some('\t') = chars.next() {
             len += 1;
-            ix += 1;
         }
         len
     }
@@ -244,14 +187,14 @@ impl<'a> Lexer<'a> {
             )
             .expect("comment re should be valid");
         }
-        let captures = COMMENT_RE.captures(&self.text[self.pos..])?;
+        let captures = COMMENT_RE.captures(&self.remainder())?;
         let comment = captures.get(0)?.as_str();
         let ending_len = captures.get(1)?.len();
         Some(comment.len() - ending_len)
     }
 
     fn scan_newline(&self) -> Option<(Token, usize)> {
-        let mut chars = self.text[self.pos..].chars();
+        let mut chars = self.remainder().chars();
         match (chars.next(), chars.next()) {
             (Some('\r'), Some('\n')) => Some((Token::Newline, 2)),
             (Some('\n'), _) => Some((Token::Newline, 1)),
@@ -260,7 +203,7 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_punct(&self) -> Option<Token> {
-        match &self.text[self.pos..].chars().next() {
+        match &self.remainder().chars().next() {
             Some('=') => Some(Token::Equal),
             Some('.') => Some(Token::Dot),
             Some('{') => Some(Token::LeftBrace),
@@ -277,18 +220,18 @@ impl<'a> Lexer<'a> {
             static ref BARE_KEY_RE: Regex =
                 Regex::new("^[[:alnum:]-_]+").expect("bare key re should be valid");
         }
-        let captures = BARE_KEY_RE.captures(&self.text[self.pos..])?;
+        let captures = BARE_KEY_RE.captures(&self.remainder())?;
         let key = captures.get(0)?.as_str();
         Some((Token::BareKey(key.into()), key.len()))
     }
 
-    fn scan_basic_string(&self) -> Option<usize> {
+    fn scan_basic_string(&self) -> Option<(Token, usize)> {
         lazy_static! {
             static ref BASIC_STR_RE: Regex = Regex::new(
                 r#"(?x)
                 ^       # start
                 "       # open quote
-                (?:     # content
+                (       # content
                     (?:
                         [^"\\\n]                            # general
                         |\\(?:[btnfr"\\]|u[0-9a-fA-F]{4})   # escapes
@@ -299,73 +242,107 @@ impl<'a> Lexer<'a> {
             )
             .expect("basic re should be valid");
         }
-        match BASIC_STR_RE.captures(&self.text[self.pos..]) {
-            Some(cap) => Some(cap.get(0).unwrap().len()),
-            None => None,
-        }
+        let captures = BASIC_STR_RE.captures(&self.remainder())?;
+        let text = captures.get(0)?.as_str();
+        let str = captures.get(1)?.as_str();
+        let str = str
+            .replace("\\b", "\u{0008}")
+            .replace("\\t", "\t")
+            .replace("\\n", "\n")
+            .replace("\\f", "\u{000C}")
+            .replace("\\r", "\r")
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\");
+        Some((Token::String(str), text.len()))
     }
 
-    fn scan_multiline_basic_string(&self) -> Option<usize> {
+    fn scan_multiline_basic_string(&self) -> Option<(Token, usize)> {
         lazy_static! {
             static ref MULTILINE_BASIC_STR_RE: Regex = Regex::new(
                 r#"(?xs)
                 ^           # start
-                """         # open delim
-                (.*)        # content
-                """         # close delim
+                "{3}        # open delim
+                .*          # content
+                "{3,}       # close delim
                 "#
             )
             .expect("multiline basic re should be valid");
+            static ref LINE_ENDING_SLASH: Regex = Regex::new(
+                r#"(?x)
+                \\              # delim
+                [ \t]*          # trailing whitespace
+                (?:\r\n|\n)     # newline
+                [[:space:]]*    # following whitespace
+                "#
+            )
+            .expect("line ending slash re should be valid");
         }
-        match MULTILINE_BASIC_STR_RE.captures(&self.text[self.pos..]) {
-            Some(cap) => Some(cap.get(0).unwrap().len()),
-            None => None,
+        let captures = MULTILINE_BASIC_STR_RE.captures(&self.remainder())?;
+        let text = captures.get(0)?.as_str();
+        let content = &text[3..text.len() - 3];
+        let content = content.strip_prefix("\n").unwrap_or(content);
+        let content = LINE_ENDING_SLASH.replace_all(content, "");
+
+        if Lexer::contains_three_consec_delims(&content) {
+            return None;
         }
+
+        let content = content
+            .replace("\\b", "\u{0008}")
+            .replace("\\t", "\t")
+            .replace("\\n", "\n")
+            .replace("\\f", "\u{000C}")
+            .replace("\\r", "\r")
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\");
+        Some((Token::String(content.into()), text.len()))
     }
 
-    fn scan_literal_string(&self) -> Option<usize> {
+    fn scan_literal_string(&self) -> Option<(Token, usize)> {
         lazy_static! {
             static ref LITERAL_STR_RE: Regex = Regex::new(
                 r#"(?x)
                 ^          # start
                 '          # open quote
-                [^'\n]*    # content
+                ([^'\n]*)  # content
                 '          # close quote
                 "#
             )
             .expect("literal str re should be valid");
         }
-        match LITERAL_STR_RE.captures(&self.text[self.pos..]) {
-            Some(cap) => Some(cap.get(0).unwrap().len()),
-            None => None,
-        }
+        let captures = LITERAL_STR_RE.captures(&self.remainder())?;
+        let text = captures.get(0).unwrap().as_str();
+        let str = captures.get(1).unwrap().as_str();
+        Some((Token::String(str.into()), text.len()))
     }
 
-    fn scan_multiline_literal_string(&self) -> Option<usize> {
+    fn scan_multiline_literal_string(&self) -> Option<(Token, usize)> {
         lazy_static! {
             static ref MULTILINE_LITERAL_STR_RE: Regex = Regex::new(
-                "(?xs)
+                r"(?xs)
                 ^       # start
                 '{3}    # open delim
+                \n?     # initial newline
                 .*?     # content
                 '{3,}   # close delim
                 "
             )
             .expect("multiline literal str re should be valid");
         }
-        match MULTILINE_LITERAL_STR_RE.captures(&self.text[self.pos..]) {
-            Some(cap) => Some(cap.get(0).unwrap().len()),
-            None => None,
-        }
+        let captures = MULTILINE_LITERAL_STR_RE.captures(&self.remainder())?;
+        let text = captures.get(0)?.as_str();
+        let content = &text[3..text.len() - 3];
+        let content = content.strip_prefix("\n").unwrap_or(content);
+        Some((Token::String(content.into()), text.len()))
     }
 
-    fn scan_integer(&self) -> Option<usize> {
+    fn scan_integer(&self) -> Result<Option<(Token, usize)>> {
         lazy_static! {
             static ref INTEGER_RE: Regex = Regex::new(
                 "(?x)
-                ^           # start
-                (?:\\+|-)?  # sign
-                (?:         # number
+                ^                       # start
+                (?:\\+|-)?              # sign
+                (?:                     # number
                     0                   # zero
                     |[1-9](_?[0-9])*    # digits and underscores
                 )
@@ -373,67 +350,87 @@ impl<'a> Lexer<'a> {
             )
             .expect("integer re should be valid");
         }
-        match INTEGER_RE.captures(&self.text[self.pos..]) {
-            Some(cap) => Some(cap.get(0).unwrap().len()),
-            None => None,
-        }
+        let Some(captures) = INTEGER_RE.captures(&self.remainder()) else {
+            return Ok(None);
+        };
+        let raw = captures.get(0).unwrap().as_str();
+        let replaced = raw.replace("_", "");
+        Ok(Some((
+            Token::Integer(replaced.parse().map_err(|_| Error::Parse)?),
+            raw.len(),
+        )))
     }
 
-    fn scan_integer_hex(&self) -> Option<usize> {
+    fn scan_integer_hex(&self) -> Result<Option<(Token, usize)>> {
         lazy_static! {
             static ref INTEGER_HEX_RE: Regex = Regex::new(
                 "(?x)
-                ^                   # start
-                0x                  # prefix
-                [[:xdigit:]]        # first digit
-                (?:_?[[:xdigit:]])*   # digits and underscores
+                ^                       # start
+                0x                      # prefix
+                [[:xdigit:]]            # first digit
+                (?:_?[[:xdigit:]])*     # digits and underscores
                 "
             )
             .expect("integer hex re should be valid");
         }
-        match INTEGER_HEX_RE.captures(&self.text[self.pos..]) {
-            Some(cap) => Some(cap.get(0).unwrap().len()),
-            None => None,
-        }
+        let Some(captures) = INTEGER_HEX_RE.captures(&self.remainder()) else {
+            return Ok(None);
+        };
+        let raw = captures.get(0).unwrap().as_str();
+        let replaced = raw.replace("_", "");
+        Ok(Some((
+            Token::Integer(i64::from_str_radix(&replaced[2..], 16).map_err(|_| Error::Parse)?),
+            raw.len(),
+        )))
     }
 
-    fn scan_integer_octal(&self) -> Option<usize> {
+    fn scan_integer_octal(&self) -> Result<Option<(Token, usize)>> {
         lazy_static! {
             static ref INTEGER_OCTAL_RE: Regex = Regex::new(
                 "(?x)
-                ^       # start
-                0o      # prefix
-                [0-7]   # first digit
-                (?:_?[0-7])* # digits and underscores
+                ^               # start
+                0o              # prefix
+                [0-7]           # first digit
+                (?:_?[0-7])*    # digits and underscores
                 "
             )
             .expect("integer octal re should be valid");
         }
-        match INTEGER_OCTAL_RE.captures(&self.text[self.pos..]) {
-            Some(cap) => Some(cap.get(0).unwrap().len()),
-            None => None,
-        }
+        let Some(captures) = INTEGER_OCTAL_RE.captures(&self.remainder()) else {
+            return Ok(None);
+        };
+        let raw = captures.get(0).unwrap().as_str();
+        let replaced = raw.replace("_", "");
+        Ok(Some((
+            Token::Integer(i64::from_str_radix(&replaced[2..], 8).map_err(|_| Error::Parse)?),
+            raw.len(),
+        )))
     }
 
-    fn scan_integer_binary(&self) -> Option<usize> {
+    fn scan_integer_binary(&self) -> Result<Option<(Token, usize)>> {
         lazy_static! {
             static ref INTEGER_BINARY_RE: Regex = Regex::new(
                 "(?x)
-                ^       # start
-                0b      # prefix
-                [0-1]   # first digit
-                (?:_?[0-1])* # digits and underscores
+                ^               # start
+                0b              # prefix
+                [0-1]           # first digit
+                (?:_?[0-1])*    # digits and underscores
                 "
             )
             .expect("integer binary re should be valid");
         }
-        match INTEGER_BINARY_RE.captures(&self.text[self.pos..]) {
-            Some(cap) => Some(cap.get(0).unwrap().len()),
-            None => None,
-        }
+        let Some(captures) = INTEGER_BINARY_RE.captures(&self.remainder()) else {
+            return Ok(None);
+        };
+        let text = captures.get(0).unwrap().as_str();
+        let replaced = text.replace("_", "");
+        Ok(Some((
+            Token::Integer(i64::from_str_radix(&replaced[2..], 2).map_err(|_| Error::Parse)?),
+            text.len(),
+        )))
     }
 
-    fn scan_float(&self) -> Option<usize> {
+    fn scan_float(&self) -> Result<Option<(Token, usize)>> {
         lazy_static! {
             static ref FLOAT_RE: Regex = Regex::new(
                 "(?x)
@@ -450,52 +447,57 @@ impl<'a> Lexer<'a> {
             static ref FLOAT_NAN_RE: Regex =
                 Regex::new("^(?:\\+|-)?nan").expect("float nan re should be valid");
         }
-        let text = &self.text[self.pos..];
-
-        if let Some(cap) = FLOAT_RE.captures(text) {
-            if let Some(_) = cap.get(1) {
-                return Some(cap.get(0).unwrap().len());
-            } else if let Some(_) = cap.get(2) {
-                return Some(cap.get(0).unwrap().len());
+        let Some(text) = ({
+            if let Some(captures) = FLOAT_RE.captures(self.remainder()) {
+                if captures.get(1).is_some() || captures.get(2).is_some() {
+                    Some(captures.get(0).unwrap().as_str())
+                } else {
+                    None
+                }
+            } else if let Some(captures) = FLOAT_INF_RE.captures(self.remainder()) {
+                Some(captures.get(0).unwrap().as_str())
+            } else if let Some(captures) = FLOAT_NAN_RE.captures(self.remainder()) {
+                Some(captures.get(0).unwrap().as_str())
+            } else {
+                None
             }
-        }
+        }) else {
+            return Ok(None);
+        };
 
-        if let Some(cap) = FLOAT_INF_RE.captures(text) {
-            return Some(cap.get(0).unwrap().len());
-        }
+        let float = text.replace("_", "");
+        let float = float.parse::<f64>().map_err(|_| Error::Parse)?;
 
-        if let Some(cap) = FLOAT_NAN_RE.captures(text) {
-            return Some(cap.get(0).unwrap().len());
-        }
-
-        None
+        Ok(Some((Token::Float(float), text.len())))
     }
 
-    fn scan_true(&self) -> Option<usize> {
+    fn scan_true(&self) -> Option<(Token, usize)> {
         lazy_static! {
             static ref TRUE_RE: Regex =
                 Regex::new("^true(?:$|\\s)").expect("true re should be valid");
         }
-        match TRUE_RE.captures(&self.text[self.pos..]) {
-            Some(_) => Some(4),
-            None => None,
+        if TRUE_RE.is_match(&self.remainder()) {
+            Some((Token::Bool(true), 4))
+        } else {
+            None
         }
     }
 
-    fn scan_false(&self) -> Option<usize> {
+    fn scan_false(&self) -> Option<(Token, usize)> {
         lazy_static! {
             static ref FALSE_RE: Regex =
                 Regex::new("^false(?:$|\\s)").expect("false re should be valid");
         }
-        match FALSE_RE.captures(&self.text[self.pos..]) {
-            Some(_) => Some(5),
-            None => None,
+        if FALSE_RE.is_match(&self.remainder()) {
+            Some((Token::Bool(false), 5))
+        } else {
+            None
         }
     }
 
-    fn scan_date_time(&self) -> Option<usize> {
+    fn scan_offset_date_time(&self) -> Result<Option<(Token, usize)>> {
         lazy_static! {
-            static ref DATE_TIME_RE: Regex = Regex::new(
+            static ref OFFSET_DATE_TIME_RE: Regex = Regex::new(
                 r"(?x)
                 ^                               # start
                 \d{4}-\d{2}-\d{2}               # date
@@ -506,15 +508,18 @@ impl<'a> Lexer<'a> {
             )
             .expect("date time re should be valid");
         }
-        match DATE_TIME_RE.captures(&self.text[self.pos..]) {
-            Some(cap) => Some(cap.get(0).unwrap().len()),
-            None => None,
-        }
+        let Some(captures) = OFFSET_DATE_TIME_RE.captures(&self.remainder()) else {
+            return Ok(None);
+        };
+        let text = captures.get(0).unwrap().as_str();
+        let text = text.replace(" ", "T");
+        let dt = DateTime::parse_from_rfc3339(&text).map_err(|_| Error::Parse)?;
+        Ok(Some((Token::OffsetDateTime(dt), text.len())))
     }
 
-    fn scan_date_time_local(&self) -> Option<usize> {
+    fn scan_local_date_time(&self) -> Result<Option<(Token, usize)>> {
         lazy_static! {
-            static ref DATE_TIME_LOCAL_RE: Regex = Regex::new(
+            static ref LOCAL_DATE_TIME_RE: Regex = Regex::new(
                 r"(?x)
                 ^                               # start
                 \d{4}-\d{2}-\d{2}               # date
@@ -524,32 +529,39 @@ impl<'a> Lexer<'a> {
             )
             .expect("date time local re should be valid");
         }
-        match DATE_TIME_LOCAL_RE.captures(&self.text[self.pos..]) {
-            Some(cap) => Some(cap.get(0).unwrap().len()),
-            None => None,
-        }
+        let Some(captures) = LOCAL_DATE_TIME_RE.captures(&self.remainder()) else {
+            return Ok(None);
+        };
+        let text = captures.get(0).unwrap().as_str();
+        let dt = NaiveDateTime::parse_from_str(text, "%Y-%m-%dT%H:%M:%S%.f")
+            .map_err(|_| Error::Parse)?;
+        Ok(Some((Token::LocalDateTime(dt), text.len())))
     }
 
-    fn scan_date_local(&self) -> Option<usize> {
+    fn scan_local_date(&self) -> Result<Option<(Token, usize)>> {
         lazy_static! {
-            static ref DATE_LOCAL_RE: Regex =
+            static ref LOCAL_DATE_RE: Regex =
                 Regex::new(r"^\d{4}-\d{2}-\d{2}").expect("date local re should be valid");
         }
-        match DATE_LOCAL_RE.captures(&self.text[self.pos..]) {
-            Some(cap) => Some(cap.get(0).unwrap().len()),
-            None => None,
-        }
+        let Some(captures) = LOCAL_DATE_RE.captures(&self.remainder()) else {
+            return Ok(None);
+        };
+        let text = captures.get(0).unwrap().as_str();
+        let date = NaiveDate::parse_from_str(text, "%Y-%m-%d").map_err(|_| Error::Parse)?;
+        Ok(Some((Token::LocalDate(date), text.len())))
     }
 
-    fn scan_time_local(&self) -> Option<usize> {
+    fn scan_local_time(&self) -> Result<Option<(Token, usize)>> {
         lazy_static! {
-            static ref TIME_LOCAL_RE: Regex =
+            static ref LOCAL_TIME_RE: Regex =
                 Regex::new(r"^\d{2}:\d{2}:\d{2}(?:\.\d+)?").expect("time local re should be valid");
         }
-        match TIME_LOCAL_RE.captures(&self.text[self.pos..]) {
-            Some(cap) => Some(cap.get(0).unwrap().len()),
-            None => None,
-        }
+        let Some(captures) = LOCAL_TIME_RE.captures(&self.remainder()) else {
+            return Ok(None);
+        };
+        let text = captures.get(0).unwrap().as_str();
+        let time = NaiveTime::parse_from_str(text, "%H:%M:%S%.f").map_err(|_| Error::Parse)?;
+        Ok(Some((Token::LocalTime(time), text.len())))
     }
 
     fn contains_three_consec_delims(text: &str) -> bool {
@@ -889,7 +901,7 @@ mod tests {
             .unwrap()
             .with_ymd_and_hms(1979, 05, 27, 07, 32, 00)
             .unwrap();
-        assert_eq!(lexer.next(context)?, Some(Token::DateTime(dt)));
+        assert_eq!(lexer.next(context)?, Some(Token::OffsetDateTime(dt)));
         Ok(())
     }
 
@@ -903,7 +915,7 @@ mod tests {
             .unwrap()
             .and_hms_opt(07, 32, 00)
             .unwrap();
-        assert_eq!(lexer.next(context)?, Some(Token::DateTimeLocal(dt)));
+        assert_eq!(lexer.next(context)?, Some(Token::LocalDateTime(dt)));
         Ok(())
     }
 
@@ -914,7 +926,7 @@ mod tests {
         let mut context = Context::default();
         context.posture = Some(Posture::Value);
         let dt = NaiveDate::from_ymd_opt(1979, 05, 27).unwrap();
-        assert_eq!(lexer.next(context)?, Some(Token::DateLocal(dt)));
+        assert_eq!(lexer.next(context)?, Some(Token::LocalDate(dt)));
         Ok(())
     }
 
@@ -925,7 +937,7 @@ mod tests {
         let mut context = Context::default();
         context.posture = Some(Posture::Value);
         let dt = NaiveTime::from_hms_opt(07, 32, 00).unwrap();
-        assert_eq!(lexer.next(context)?, Some(Token::TimeLocal(dt)));
+        assert_eq!(lexer.next(context)?, Some(Token::LocalTime(dt)));
         Ok(())
     }
 }
