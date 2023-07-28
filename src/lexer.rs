@@ -28,39 +28,8 @@ pub enum Token {
 }
 
 lazy_static! {
-    static ref COMMENT_RE: Regex = Regex::new("^#.*(?:\r\n|\n|$)").expect("comment re should be valid");
-    static ref BARE_KEY_RE: Regex =
-        Regex::new("^[a-zA-Z0-9_-]+").expect("bare key re should be valid");
-    static ref LITERAL_STR_RE: Regex =
-        Regex::new("^'([^'\n]*)'").expect("literal str re should be valid");
-    static ref MULTILINE_LITERAL_STR_RE: Regex =
-        Regex::new("^'{3}(?s)(.*?)'{3,}").expect("multiline literal str re should be valid");
-    static ref BASIC_STR_RE: Regex =
-        Regex::new(r#"^"((?:[^"\\\n]|\\(?:[btnfr"\\]|u[0-9a-fA-F]{4}))*)""#).expect("basic re should be valid");
-    static ref MULTILINE_BASIC_STR_RE: Regex =
-        Regex::new(r#"^"""(?s)(.*)""""#).expect("multiline basic re should be valid");
-    static ref LINE_ENDING_SLASH: Regex =
-        Regex::new(r#"\\[ \t]*(?:\r\n|\n)[[:space:]]*"#).expect("line ending slash re should be valid");
-    static ref INTEGER_RE: Regex =
-        Regex::new("^(?:\\+|-)?(?:0|[1-9](_?[0-9])*)").expect("integer re should be valid");
-    static ref INTEGER_HEX_RE: Regex =
-        Regex::new("^0x[a-fA-F0-9](?:_?[a-fA-F0-9])*").expect("integer hex re should be valid");
-    static ref INTEGER_OCTAL_RE: Regex =
-        Regex::new("^0o[0-7](?:_?[0-7])*").expect("integer octal re should be valid");
-    static ref INTEGER_BINARY_RE: Regex =
-        Regex::new("^0b[0-1](?:_?[0-1])*").expect("integer binary re should be valid");
-    static ref FLOAT_RE: Regex =
-        Regex::new("^(?:\\+|-)?(?:0|[1-9](?:_?[0-9])*)(\\.[0-9](?:_?[0-9])*)?([eE](?:\\+|-)?(?:[0-9](?:_?[0-9])*))?").expect("float re should be valid");
-    static ref FLOAT_INF_RE: Regex =
-        Regex::new("^(?:\\+|-)?inf").expect("float inf re should be valid");
-    static ref FLOAT_NAN_RE: Regex =
-        Regex::new("^(?:\\+|-)?nan").expect("float nan re should be valid");
-    static ref TRUE_RE: Regex = Regex::new("^true(?:$|\\s)").expect("true re should be valid");
-    static ref FALSE_RE: Regex = Regex::new("^false(?:$|\\s)").expect("false re should be valid");
-    static ref DATE_TIME_RE: Regex = Regex::new("^((?:(\\d{4}-\\d{2}-\\d{2})[T ](\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?))(Z|[\\+-]\\d{2}:\\d{2}))").expect("date time re should be valid");
-    static ref DATE_TIME_LOCAL_RE: Regex = Regex::new("^((?:(\\d{4}-\\d{2}-\\d{2})[T ](\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?)))").expect("date time local re should be valid");
-    static ref DATE_LOCAL_RE: Regex = Regex::new("^((?:(\\d{4}-\\d{2}-\\d{2})))").expect("date local re should be valid");
-    static ref TIME_LOCAL_RE: Regex = Regex::new("^((?:(\\d{2}:\\d{2}:\\d{2}(?:\\.\\d+)?)))").expect("time local re should be valid");
+    static ref LINE_ENDING_SLASH: Regex = Regex::new(r#"\\[ \t]*(?:\r\n|\n)[[:space:]]*"#)
+        .expect("line ending slash re should be valid");
 }
 
 #[derive(Clone)]
@@ -96,9 +65,9 @@ impl<'a> Lexer<'a> {
             return Ok(None);
         }
 
-        if let Some(len) = self.scan_newline() {
+        if let Some((newline, len)) = self.scan_newline() {
             self.pos += len;
-            return Ok(Some(Token::Newline));
+            return Ok(Some(newline));
         }
 
         if let Some(punct) = self.scan_punct() {
@@ -107,10 +76,9 @@ impl<'a> Lexer<'a> {
         }
 
         if !matches!(context.posture, Some(Posture::Value)) {
-            if let Some(len) = self.scan_bare_key() {
-                let key = &self.text[self.pos..self.pos + len];
+            if let Some((key, len)) = self.scan_bare_key() {
                 self.pos += len;
-                return Ok(Some(Token::BareKey(key.into())));
+                return Ok(Some(key));
             }
         }
 
@@ -265,29 +233,29 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_comment(&self) -> Option<usize> {
-        match COMMENT_RE.captures(&self.text[self.pos..]) {
-            Some(cap) => {
-                let text = cap.get(0).unwrap();
-                if text.as_str().ends_with("\n") {
-                    Some(text.len() - 1)
-                } else if text.as_str().ends_with("\r\n") {
-                    Some(text.len() - 2)
-                } else {
-                    Some(text.len())
-                }
-            }
-            None => None,
+        lazy_static! {
+            static ref COMMENT_RE: Regex = Regex::new(
+                "(?x)
+                ^               # start
+                \\#             # delimiter
+                .*              # body
+                (\r\n|\n|$)     # newline or eof
+                "
+            )
+            .expect("comment re should be valid");
         }
+        let captures = COMMENT_RE.captures(&self.text[self.pos..])?;
+        let comment = captures.get(0)?.as_str();
+        let ending_len = captures.get(1)?.len();
+        Some(comment.len() - ending_len)
     }
 
-    fn scan_newline(&self) -> Option<usize> {
-        let text = &self.text[self.pos..];
-        if let Some('\n') = text.chars().next() {
-            Some(1)
-        } else if text.starts_with("\r\n") {
-            Some(2)
-        } else {
-            None
+    fn scan_newline(&self) -> Option<(Token, usize)> {
+        let mut chars = self.text[self.pos..].chars();
+        match (chars.next(), chars.next()) {
+            (Some('\r'), Some('\n')) => Some((Token::Newline, 2)),
+            (Some('\n'), _) => Some((Token::Newline, 1)),
+            _ => None,
         }
     }
 
@@ -304,14 +272,33 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    fn scan_bare_key(&self) -> Option<usize> {
-        match BARE_KEY_RE.captures(&self.text[self.pos..]) {
-            Some(cap) => Some(cap.get(0).unwrap().len()),
-            None => None,
+    fn scan_bare_key(&self) -> Option<(Token, usize)> {
+        lazy_static! {
+            static ref BARE_KEY_RE: Regex =
+                Regex::new("^[[:alnum:]-_]+").expect("bare key re should be valid");
         }
+        let captures = BARE_KEY_RE.captures(&self.text[self.pos..])?;
+        let key = captures.get(0)?.as_str();
+        Some((Token::BareKey(key.into()), key.len()))
     }
 
     fn scan_basic_string(&self) -> Option<usize> {
+        lazy_static! {
+            static ref BASIC_STR_RE: Regex = Regex::new(
+                r#"(?x)
+                ^       # start
+                "       # open quote
+                (?:     # content
+                    (?:
+                        [^"\\\n]                            # general
+                        |\\(?:[btnfr"\\]|u[0-9a-fA-F]{4})   # escapes
+                    )*
+                )
+                "       # close quote
+                "#
+            )
+            .expect("basic re should be valid");
+        }
         match BASIC_STR_RE.captures(&self.text[self.pos..]) {
             Some(cap) => Some(cap.get(0).unwrap().len()),
             None => None,
@@ -319,6 +306,17 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_multiline_basic_string(&self) -> Option<usize> {
+        lazy_static! {
+            static ref MULTILINE_BASIC_STR_RE: Regex = Regex::new(
+                r#"(?xs)
+                ^           # start
+                """         # open delim
+                (.*)        # content
+                """         # close delim
+                "#
+            )
+            .expect("multiline basic re should be valid");
+        }
         match MULTILINE_BASIC_STR_RE.captures(&self.text[self.pos..]) {
             Some(cap) => Some(cap.get(0).unwrap().len()),
             None => None,
@@ -326,6 +324,17 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_literal_string(&self) -> Option<usize> {
+        lazy_static! {
+            static ref LITERAL_STR_RE: Regex = Regex::new(
+                r#"(?x)
+                ^          # start
+                '          # open quote
+                [^'\n]*    # content
+                '          # close quote
+                "#
+            )
+            .expect("literal str re should be valid");
+        }
         match LITERAL_STR_RE.captures(&self.text[self.pos..]) {
             Some(cap) => Some(cap.get(0).unwrap().len()),
             None => None,
@@ -333,6 +342,17 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_multiline_literal_string(&self) -> Option<usize> {
+        lazy_static! {
+            static ref MULTILINE_LITERAL_STR_RE: Regex = Regex::new(
+                "(?xs)
+                ^       # start
+                '{3}    # open delim
+                .*?     # content
+                '{3,}   # close delim
+                "
+            )
+            .expect("multiline literal str re should be valid");
+        }
         match MULTILINE_LITERAL_STR_RE.captures(&self.text[self.pos..]) {
             Some(cap) => Some(cap.get(0).unwrap().len()),
             None => None,
@@ -340,6 +360,19 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_integer(&self) -> Option<usize> {
+        lazy_static! {
+            static ref INTEGER_RE: Regex = Regex::new(
+                "(?x)
+                ^           # start
+                (?:\\+|-)?  # sign
+                (?:         # number
+                    0                   # zero
+                    |[1-9](_?[0-9])*    # digits and underscores
+                )
+                "
+            )
+            .expect("integer re should be valid");
+        }
         match INTEGER_RE.captures(&self.text[self.pos..]) {
             Some(cap) => Some(cap.get(0).unwrap().len()),
             None => None,
@@ -347,6 +380,17 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_integer_hex(&self) -> Option<usize> {
+        lazy_static! {
+            static ref INTEGER_HEX_RE: Regex = Regex::new(
+                "(?x)
+                ^                   # start
+                0x                  # prefix
+                [[:xdigit:]]        # first digit
+                (?:_?[[:xdigit:]])*   # digits and underscores
+                "
+            )
+            .expect("integer hex re should be valid");
+        }
         match INTEGER_HEX_RE.captures(&self.text[self.pos..]) {
             Some(cap) => Some(cap.get(0).unwrap().len()),
             None => None,
@@ -354,6 +398,17 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_integer_octal(&self) -> Option<usize> {
+        lazy_static! {
+            static ref INTEGER_OCTAL_RE: Regex = Regex::new(
+                "(?x)
+                ^       # start
+                0o      # prefix
+                [0-7]   # first digit
+                (?:_?[0-7])* # digits and underscores
+                "
+            )
+            .expect("integer octal re should be valid");
+        }
         match INTEGER_OCTAL_RE.captures(&self.text[self.pos..]) {
             Some(cap) => Some(cap.get(0).unwrap().len()),
             None => None,
@@ -361,6 +416,17 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_integer_binary(&self) -> Option<usize> {
+        lazy_static! {
+            static ref INTEGER_BINARY_RE: Regex = Regex::new(
+                "(?x)
+                ^       # start
+                0b      # prefix
+                [0-1]   # first digit
+                (?:_?[0-1])* # digits and underscores
+                "
+            )
+            .expect("integer binary re should be valid");
+        }
         match INTEGER_BINARY_RE.captures(&self.text[self.pos..]) {
             Some(cap) => Some(cap.get(0).unwrap().len()),
             None => None,
@@ -368,6 +434,22 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_float(&self) -> Option<usize> {
+        lazy_static! {
+            static ref FLOAT_RE: Regex = Regex::new(
+                "(?x)
+                    ^                                       # start
+                    (?:\\+|-)?                              # sign
+                    (?:0|[1-9](?:_?[0-9])*)                 # whole number
+                    (\\.[0-9](?:_?[0-9])*)?                 # fraction
+                    ([eE](?:\\+|-)?(?:[0-9](?:_?[0-9])*))?  # exponent
+                    "
+            )
+            .expect("float re should be valid");
+            static ref FLOAT_INF_RE: Regex =
+                Regex::new("^(?:\\+|-)?inf").expect("float inf re should be valid");
+            static ref FLOAT_NAN_RE: Regex =
+                Regex::new("^(?:\\+|-)?nan").expect("float nan re should be valid");
+        }
         let text = &self.text[self.pos..];
 
         if let Some(cap) = FLOAT_RE.captures(text) {
@@ -390,6 +472,10 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_true(&self) -> Option<usize> {
+        lazy_static! {
+            static ref TRUE_RE: Regex =
+                Regex::new("^true(?:$|\\s)").expect("true re should be valid");
+        }
         match TRUE_RE.captures(&self.text[self.pos..]) {
             Some(_) => Some(4),
             None => None,
@@ -397,6 +483,10 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_false(&self) -> Option<usize> {
+        lazy_static! {
+            static ref FALSE_RE: Regex =
+                Regex::new("^false(?:$|\\s)").expect("false re should be valid");
+        }
         match FALSE_RE.captures(&self.text[self.pos..]) {
             Some(_) => Some(5),
             None => None,
@@ -404,6 +494,18 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_date_time(&self) -> Option<usize> {
+        lazy_static! {
+            static ref DATE_TIME_RE: Regex = Regex::new(
+                r"(?x)
+                ^                               # start
+                \d{4}-\d{2}-\d{2}               # date
+                [T\ ]                           # separator
+                \d{2}:\d{2}:\d{2}(?:\.\d+)?     # time
+                (?:Z|[\+-]\d{2}:\d{2})          # offset
+                "
+            )
+            .expect("date time re should be valid");
+        }
         match DATE_TIME_RE.captures(&self.text[self.pos..]) {
             Some(cap) => Some(cap.get(0).unwrap().len()),
             None => None,
@@ -411,6 +513,17 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_date_time_local(&self) -> Option<usize> {
+        lazy_static! {
+            static ref DATE_TIME_LOCAL_RE: Regex = Regex::new(
+                r"(?x)
+                ^                               # start
+                \d{4}-\d{2}-\d{2}               # date
+                [T\ ]                           # separator
+                \d{2}:\d{2}:\d{2}(?:\.\d+)?     # time
+                "
+            )
+            .expect("date time local re should be valid");
+        }
         match DATE_TIME_LOCAL_RE.captures(&self.text[self.pos..]) {
             Some(cap) => Some(cap.get(0).unwrap().len()),
             None => None,
@@ -418,6 +531,10 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_date_local(&self) -> Option<usize> {
+        lazy_static! {
+            static ref DATE_LOCAL_RE: Regex =
+                Regex::new(r"^\d{4}-\d{2}-\d{2}").expect("date local re should be valid");
+        }
         match DATE_LOCAL_RE.captures(&self.text[self.pos..]) {
             Some(cap) => Some(cap.get(0).unwrap().len()),
             None => None,
@@ -425,6 +542,10 @@ impl<'a> Lexer<'a> {
     }
 
     fn scan_time_local(&self) -> Option<usize> {
+        lazy_static! {
+            static ref TIME_LOCAL_RE: Regex =
+                Regex::new(r"^\d{2}:\d{2}:\d{2}(?:\.\d+)?").expect("time local re should be valid");
+        }
         match TIME_LOCAL_RE.captures(&self.text[self.pos..]) {
             Some(cap) => Some(cap.get(0).unwrap().len()),
             None => None,
