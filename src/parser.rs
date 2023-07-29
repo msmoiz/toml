@@ -56,7 +56,15 @@ impl<'a> Parser<'a> {
 
                     table.insert(leaf_key.clone(), value);
                 }
-                Token::LeftBracket => self.table()?,
+                Token::LeftBracket => {
+                    let mut lookahead = self.lexer.clone();
+                    lookahead.next(Context::default())?; // skip first bracket
+                    if let Some(Token::LeftBracket) = lookahead.next(Context::default())? {
+                        self.array_of_tables()?
+                    } else {
+                        self.table()?
+                    }
+                }
                 _ => return Err(Error::Parse),
             }
         }
@@ -275,6 +283,13 @@ impl<'a> Parser<'a> {
         for key in &keychain {
             table = match table.get(key) {
                 Some(Value::Table(_)) => table.get_mut(key).unwrap().as_table_mut(),
+                Some(Value::Array(_)) => table
+                    .get_mut(key)
+                    .unwrap()
+                    .as_arr_mut()
+                    .last_mut()
+                    .unwrap()
+                    .as_table_mut(),
                 Some(_) => return Err(Error::Parse),
                 None => {
                     table.insert(key.clone(), Value::Table(Table::new()));
@@ -289,11 +304,71 @@ impl<'a> Parser<'a> {
         Ok(())
     }
 
+    fn array_of_tables(&mut self) -> Result<()> {
+        let Some(Token::LeftBracket) = self.lexer.next(Context::default())? else {
+            return Err(Error::Parse);
+        };
+        let Some(Token::LeftBracket) = self.lexer.next(Context::default())? else {
+            return Err(Error::Parse);
+        };
+        let keychain = self.keychain()?;
+        let Some(Token::RightBracket) = self.lexer.next(Context::default())? else {
+            return Err(Error::Parse);
+        };
+        let Some(Token::RightBracket) = self.lexer.next(Context::default())? else {
+            return Err(Error::Parse);
+        };
+        self.newline_or_eof()?;
+
+        let mut table = self.root.as_table_mut();
+        for key in &keychain[..keychain.len() - 1] {
+            table = match table.get(key) {
+                Some(Value::Table(_)) => table.get_mut(key).unwrap().as_table_mut(),
+                Some(Value::Array(_)) => table
+                    .get_mut(key)
+                    .unwrap()
+                    .as_arr_mut()
+                    .last_mut()
+                    .unwrap()
+                    .as_table_mut(),
+                Some(_) => return Err(Error::Parse),
+                None => {
+                    table.insert(key.clone(), Value::Table(Table::new()));
+                    table.get_mut(key).unwrap().as_table_mut()
+                }
+            }
+        }
+
+        let leaf_key = keychain.last().unwrap();
+        match table.get_mut(leaf_key) {
+            Some(Value::Array(arr)) => arr.push(Value::Table(Table::new())),
+            None => {
+                table.insert(
+                    leaf_key.clone(),
+                    Value::Array(vec![Value::Table(Table::new())]),
+                );
+            }
+            _ => {}
+        }
+
+        self.current_table_chain = keychain;
+
+        Ok(())
+    }
+
     fn current_table_mut(&mut self) -> Result<&mut Table> {
         let mut table = self.root.as_table_mut();
+        println!("{table:?}");
         for key in &self.current_table_chain {
             table = match table.get(key) {
                 Some(Value::Table(_)) => table.get_mut(key).unwrap().as_table_mut(),
+                Some(Value::Array(_)) => table
+                    .get_mut(key)
+                    .unwrap()
+                    .as_arr_mut()
+                    .last_mut()
+                    .unwrap()
+                    .as_table_mut(),
                 Some(_) => return Err(Error::Parse),
                 None => return Err(Error::Parse),
             }

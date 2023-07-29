@@ -37,6 +37,7 @@ pub struct Context {
     pub posture: Option<Posture>,
 }
 
+#[derive(Clone)]
 pub struct Lexer<'a> {
     text: &'a str,
     pos: usize,
