@@ -358,7 +358,6 @@ impl<'a> Parser<'a> {
 
     fn current_table_mut(&mut self) -> Result<&mut Table> {
         let mut table = self.root.as_table_mut();
-        println!("{table:?}");
         for key in &self.current_table_chain {
             table = match table.get(key) {
                 Some(Value::Table(_)) => table.get_mut(key).unwrap().as_table_mut(),
