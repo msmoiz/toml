@@ -9,7 +9,6 @@ use crate::error::{Error, Result};
 #[derive(Debug, PartialEq)]
 pub enum Token {
     Newline,
-    BareKey(String),
     Equal,
     Dot,
     Comma,
@@ -222,7 +221,7 @@ impl<'a> Lexer<'a> {
         }
         let captures = BARE_KEY_RE.captures(&self.remainder())?;
         let key = captures.get(0)?.as_str();
-        Some((Token::BareKey(key.into()), key.len()))
+        Some((Token::String(key.into()), key.len()))
     }
 
     fn scan_basic_string(&self) -> Option<(Token, usize)> {
@@ -632,7 +631,7 @@ mod tests {
         let text = "key";
         let mut lexer = Lexer::new(text);
         let context = Context::default();
-        assert_eq!(lexer.next(context)?, Some(Token::BareKey("key".into())));
+        assert_eq!(lexer.next(context)?, Some(Token::String("key".into())));
         Ok(())
     }
 
