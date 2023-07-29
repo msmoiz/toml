@@ -348,7 +348,7 @@ impl<'a> Parser<'a> {
                     Value::Array(vec![Value::Table(Table::new())]),
                 );
             }
-            _ => {}
+            _ => return Err(Error::Parse),
         }
 
         self.current_table_chain = keychain;
