@@ -33,7 +33,29 @@ impl<'a> Parser<'a> {
                 Token::Newline => {
                     self.lexer.next(Context::default())?;
                 }
-                Token::String(_) => self.key_val()?,
+                Token::String(_) => {
+                    let (keychain, value) = self.key_val()?;
+                    self.newline_or_eof()?;
+
+                    let mut table = self.current_table_mut()?;
+                    for key in &keychain[..keychain.len() - 1] {
+                        table = match table.get(key) {
+                            Some(Value::Table(_)) => table.get_mut(key).unwrap().as_table_mut(),
+                            Some(_) => return Err(Error::Parse),
+                            None => {
+                                table.insert(key.clone(), Value::Table(Table::new()));
+                                table.get_mut(key).unwrap().as_table_mut()
+                            }
+                        }
+                    }
+
+                    let leaf_key = keychain.last().unwrap();
+                    if table.contains_key(leaf_key) {
+                        return Err(Error::Parse);
+                    }
+
+                    table.insert(leaf_key.clone(), value);
+                }
                 Token::LeftBracket => self.table()?,
                 _ => return Err(Error::Parse),
             }
@@ -41,34 +63,13 @@ impl<'a> Parser<'a> {
         Ok(self.root.clone())
     }
 
-    fn key_val(&mut self) -> Result<()> {
+    fn key_val(&mut self) -> Result<(Vec<String>, Value)> {
         let keychain = self.keychain()?;
         let Some(Token::Equal) = self.lexer.next(Context::default())? else {
             return Err(Error::Parse);
         };
         let value = self.value()?;
-        self.newline_or_eof()?;
-
-        let mut table = self.current_table_mut()?;
-        for key in &keychain[..keychain.len() - 1] {
-            table = match table.get(key) {
-                Some(Value::Table(_)) => table.get_mut(key).unwrap().as_table_mut(),
-                Some(_) => return Err(Error::Parse),
-                None => {
-                    table.insert(key.clone(), Value::Table(Table::new()));
-                    table.get_mut(key).unwrap().as_table_mut()
-                }
-            }
-        }
-
-        let leaf_key = keychain.last().unwrap();
-        if table.contains_key(leaf_key) {
-            return Err(Error::Parse);
-        }
-
-        table.insert(leaf_key.clone(), value);
-
-        Ok(())
+        Ok((keychain, value))
     }
 
     fn keychain(&mut self) -> Result<Vec<String>> {
@@ -89,7 +90,7 @@ impl<'a> Parser<'a> {
     fn value(&mut self) -> Result<Value> {
         let mut context = Context::default();
         context.posture = Some(Posture::Value);
-        let value = match self.lexer.next(context)? {
+        let value = match self.lexer.peek(context.clone())? {
             Some(value) => match value {
                 Token::Newline
                 | Token::Equal
@@ -97,15 +98,40 @@ impl<'a> Parser<'a> {
                 | Token::Comma
                 | Token::RightBrace
                 | Token::RightBracket => return Err(Error::Parse),
-                Token::String(x) => Value::String(x),
-                Token::Integer(x) => Value::Integer(x),
-                Token::Float(x) => Value::Float(x),
-                Token::Bool(x) => Value::Bool(x),
-                Token::OffsetDateTime(x) => Value::OffsetDateTime(x),
-                Token::LocalDateTime(x) => Value::LocalDateTime(x),
-                Token::LocalDate(x) => Value::LocalDate(x),
-                Token::LocalTime(x) => Value::LocalTime(x),
-                _ => todo!(),
+                Token::String(x) => {
+                    self.lexer.next(context)?;
+                    Value::String(x)
+                }
+                Token::Integer(x) => {
+                    self.lexer.next(context)?;
+                    Value::Integer(x)
+                }
+                Token::Float(x) => {
+                    self.lexer.next(context)?;
+                    Value::Float(x)
+                }
+                Token::Bool(x) => {
+                    self.lexer.next(context)?;
+                    Value::Bool(x)
+                }
+                Token::OffsetDateTime(x) => {
+                    self.lexer.next(context)?;
+                    Value::OffsetDateTime(x)
+                }
+                Token::LocalDateTime(x) => {
+                    self.lexer.next(context)?;
+                    Value::LocalDateTime(x)
+                }
+                Token::LocalDate(x) => {
+                    self.lexer.next(context)?;
+                    Value::LocalDate(x)
+                }
+                Token::LocalTime(x) => {
+                    self.lexer.next(context)?;
+                    Value::LocalTime(x)
+                }
+                Token::LeftBrace => self.inline_table()?,
+                Token::LeftBracket => self.array()?,
             },
             None => return Err(Error::Parse),
         };
@@ -117,6 +143,118 @@ impl<'a> Parser<'a> {
             Some(Token::Newline) | None => Ok(()),
             _ => Err(Error::Parse),
         }
+    }
+
+    fn inline_table(&mut self) -> Result<Value> {
+        let mut table = Table::new();
+
+        let Some(Token::LeftBrace) = self.lexer.next(Context::default())? else {
+            return Err(Error::Parse);
+        };
+
+        match self.lexer.peek(Context::default())? {
+            Some(Token::String(_)) => {
+                let (keychain, value) = self.key_val()?;
+                let mut subtable = &mut table;
+                for key in &keychain[..keychain.len() - 1] {
+                    subtable = match subtable.get(key) {
+                        Some(Value::Table(_)) => subtable.get_mut(key).unwrap().as_table_mut(),
+                        Some(_) => return Err(Error::Parse),
+                        None => {
+                            subtable.insert(key.clone(), Value::Table(Table::new()));
+                            subtable.get_mut(key).unwrap().as_table_mut()
+                        }
+                    }
+                }
+
+                let leaf_key = keychain.last().unwrap();
+                if subtable.contains_key(leaf_key) {
+                    return Err(Error::Parse);
+                }
+
+                subtable.insert(leaf_key.clone(), value);
+
+                while let Some(Token::Comma) = self.lexer.peek(Context::default())? {
+                    self.lexer.next(Context::default())?; // skip comma
+                    let (keychain, value) = self.key_val()?;
+                    let mut subtable = &mut table;
+                    for key in &keychain[..keychain.len() - 1] {
+                        subtable = match subtable.get(key) {
+                            Some(Value::Table(_)) => subtable.get_mut(key).unwrap().as_table_mut(),
+                            Some(_) => return Err(Error::Parse),
+                            None => {
+                                subtable.insert(key.clone(), Value::Table(Table::new()));
+                                subtable.get_mut(key).unwrap().as_table_mut()
+                            }
+                        }
+                    }
+
+                    let leaf_key = keychain.last().unwrap();
+                    if subtable.contains_key(leaf_key) {
+                        return Err(Error::Parse);
+                    }
+
+                    subtable.insert(leaf_key.clone(), value);
+                }
+            }
+            Some(Token::RightBrace) => {}
+            _ => return Err(Error::Parse),
+        }
+
+        let Some(Token::RightBrace) = self.lexer.next(Context::default())? else {
+            return Err(Error::Parse);
+        };
+
+        Ok(Value::Table(table))
+    }
+
+    fn array(&mut self) -> Result<Value> {
+        let mut array = Vec::new();
+
+        let Some(Token::LeftBracket) = self.lexer.next(Context::default())? else {
+            return Err(Error::Parse);
+        };
+
+        match self.lexer.peek(Context::default())? {
+            Some(Token::RightBracket) => {}
+            _ => {
+                while let Some(Token::Newline) = self.lexer.peek(Context::default())? {
+                    self.lexer.next(Context::default())?; // skip newline
+                }
+
+                let value = self.value()?;
+                array.push(value);
+
+                while let Some(Token::Newline) = self.lexer.peek(Context::default())? {
+                    self.lexer.next(Context::default())?; // skip newline
+                }
+
+                while let Some(Token::Comma) = self.lexer.peek(Context::default())? {
+                    self.lexer.next(Context::default())?; // skip comma
+
+                    while let Some(Token::Newline) = self.lexer.peek(Context::default())? {
+                        self.lexer.next(Context::default())?; // skip newline
+                    }
+
+                    if let Some(Token::RightBracket) = self.lexer.peek(Context::default())? {
+                        break;
+                    };
+
+                    let value = self.value()?;
+                    array.push(value);
+
+                    while let Some(Token::Newline) = self.lexer.peek(Context::default())? {
+                        self.lexer.next(Context::default())?; // skip newline
+                    }
+                }
+            }
+        }
+
+        let Some(Token::RightBracket) = self.lexer.next(Context::default())? else {
+            return Err(Error::Parse);
+        };
+
+        Ok(Value::Array(array))
     }
 
     fn table(&mut self) -> Result<()> {

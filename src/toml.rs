@@ -93,6 +93,20 @@ impl Value {
         }
     }
 
+    pub fn as_arr(&self) -> &[Value] {
+        match self {
+            Value::Array(array) => array,
+            _ => panic!("not an array value"),
+        }
+    }
+
+    pub fn as_arr_mut(&mut self) -> &mut [Value] {
+        match self {
+            Value::Array(array) => array,
+            _ => panic!("not an array value"),
+        }
+    }
+
     pub fn insert(&mut self, key: String, value: Value) {
         match self {
             Value::Table(table) => {
@@ -109,7 +123,7 @@ impl Index<&str> for Value {
     fn index(&self, index: &str) -> &Self::Output {
         match self {
             Value::Table(table) => &table[index],
-            _ => panic!("index only supported for array and table values"),
+            _ => panic!("index by string only supported for table values"),
         }
     }
 }
@@ -118,7 +132,27 @@ impl IndexMut<&str> for Value {
     fn index_mut(&mut self, index: &str) -> &mut Self::Output {
         match self {
             Value::Table(table) => table.get_mut(index).unwrap(),
-            _ => panic!("index only supported for array and table values"),
+            _ => panic!("index by string only supported for table values"),
+        }
+    }
+}
+
+impl Index<usize> for Value {
+    type Output = Value;
+
+    fn index(&self, index: usize) -> &Self::Output {
+        match self {
+            Value::Array(array) => &array[index],
+            _ => panic!("index by int only supported for array values"),
+        }
+    }
+}
+
+impl IndexMut<usize> for Value {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output {
+        match self {
+            Value::Array(array) => &mut array[index],
+            _ => panic!("index by int only supported for array values"),
         }
     }
 }
