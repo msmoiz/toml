@@ -15,3 +15,27 @@ animal = { type.name = "pug" }
     assert_eq!(root["animal"]["type"]["name"].as_str(), "pug");
     Ok(())
 }
+
+#[test]
+fn inline_table_2() -> Result<()> {
+    let text = r#"
+[product]
+type = { name = "Nail" }
+type.edible = false  # INVALID
+"#;
+    let root = from_str(text);
+    assert!(root.is_err());
+    Ok(())
+}
+
+#[test]
+fn inline_table_3() -> Result<()> {
+    let text = r#"
+[product]
+type.name = "Nail"
+type = { edible = false }  # INVALID
+"#;
+    let root = from_str(text);
+    assert!(root.is_err());
+    Ok(())
+}

@@ -10,7 +10,9 @@ pub struct Parser<'a> {
     lexer: Lexer<'a>,
     root: Value,
     current_table_key: Vec<String>,
-    explicitly_defined_tables: Vec<String>,
+    predefined_tables: Vec<String>,
+    inlined_tables: Vec<String>,
+    inlined_arrays: Vec<String>,
 }
 
 impl<'a> Parser<'a> {
@@ -19,7 +21,9 @@ impl<'a> Parser<'a> {
             lexer: Lexer::new(text),
             root: Value::Table(HashMap::new()),
             current_table_key: Vec::new(),
-            explicitly_defined_tables: Vec::new(),
+            predefined_tables: Vec::new(),
+            inlined_tables: Vec::new(),
+            inlined_arrays: Vec::new(),
         }
     }
 
@@ -37,25 +41,32 @@ impl<'a> Parser<'a> {
                 Token::String(_) => {
                     let (key, value) = self.key_value_pair()?;
                     self.require_newline_or_eof()?;
-
                     let mut table = self.current_table_mut()?;
-                    for segment in &key[..key.len() - 1] {
-                        table = match table.get(segment) {
-                            Some(Value::Table(_)) => table.get_mut(segment).unwrap().as_table_mut(),
-                            Some(_) => return Err(Error::Parse),
-                            None => {
-                                table.insert(segment.clone(), Value::Table(Table::new()));
-                                table.get_mut(segment).unwrap().as_table_mut()
-                            }
-                        }
-                    }
-
-                    let leaf_key = key.last().unwrap();
-                    if table.contains_key(leaf_key) {
+                    let subtable_key = &key[..key.len() - 1];
+                    let subtable = Self::find_or_create_subtable_mut(&mut table, subtable_key)?;
+                    let last_segment = key.last().unwrap();
+                    if subtable.contains_key(last_segment) {
                         return Err(Error::Parse);
                     }
-
-                    table.insert(leaf_key.clone(), value);
+                    subtable.insert(last_segment.clone(), value.clone());
+                    let absolute_key =
+                        self.absolute_key_string(&self.current_table_key, &key[..key.len() - 1])?;
+                    self.predefined_tables.push(absolute_key.clone());
+                    if self
+                        .inlined_tables
+                        .iter()
+                        .any(|table| format!("{absolute_key}.{last_segment}").starts_with(table))
+                    {
+                        return Err(Error::Parse);
+                    }
+                    if matches!(value, Value::Table(_)) {
+                        self.inlined_tables
+                            .push(format!("{absolute_key}.{last_segment}"));
+                    }
+                    if matches!(value, Value::Array(_)) {
+                        self.inlined_arrays
+                            .push(format!("{absolute_key}.{last_segment}"));
+                    }
                 }
                 Token::LeftBracket => {
                     let mut lookahead = self.lexer.clone();
@@ -93,34 +104,26 @@ impl<'a> Parser<'a> {
                                 _ => return Err(Error::Parse),
                             }
 
+                            let absolute_key =
+                                self.absolute_key_string(&[], &key[..key.len() - 1])?;
+                            if self
+                                .inlined_arrays
+                                .contains(&format!("{absolute_key}.{last_segment}"))
+                            {
+                                return Err(Error::Parse);
+                            }
+
                             self.current_table_key = key;
                         }
                         _ => {
                             let key = self.table()?;
-
-                            if self.explicitly_defined_tables.contains(&key.join(".")) {
+                            let mut table = self.root.as_table_mut();
+                            Self::find_or_create_subtable_mut(&mut table, &key)?;
+                            let abs_key = self.absolute_key_string(&[], &key)?;
+                            if self.predefined_tables.contains(&abs_key) {
                                 return Err(Error::Parse);
                             }
-
-                            let mut table = self.root.as_table_mut();
-                            for segment in &key {
-                                table = match table.get(segment) {
-                                    Some(Value::Table(_)) => {
-                                        table.get_mut(segment).unwrap().as_table_mut()
-                                    }
-                                    Some(Value::Array(_)) => {
-                                        let arr = table.get_mut(segment).unwrap().as_arr_mut();
-                                        arr.last_mut().unwrap().as_table_mut()
-                                    }
-                                    Some(_) => return Err(Error::Parse),
-                                    None => {
-                                        table.insert(segment.clone(), Value::Table(Table::new()));
-                                        table.get_mut(segment).unwrap().as_table_mut()
-                                    }
-                                }
-                            }
-
-                            self.explicitly_defined_tables.push(key.join("."));
+                            self.predefined_tables.push(abs_key);
                             self.current_table_key = key;
                         }
                     }
@@ -195,7 +198,7 @@ impl<'a> Parser<'a> {
                 let (key, value) = self.key_value_pair()?;
                 let root = &mut inline_table;
                 let subtable_key = &key[..key.len() - 1];
-                let subtable = Parser::find_or_create_subtable_mut(root, subtable_key)?;
+                let subtable = Self::find_or_create_subtable_mut(root, subtable_key)?;
                 let last_segment = key.last().unwrap();
                 if subtable.contains_key(last_segment) {
                     return Err(Error::Parse);
@@ -207,7 +210,7 @@ impl<'a> Parser<'a> {
                     let (key, value) = self.key_value_pair()?;
                     let root = &mut inline_table;
                     let subtable_key = &key[..key.len() - 1];
-                    let subtable = Parser::find_or_create_subtable_mut(root, subtable_key)?;
+                    let subtable = Self::find_or_create_subtable_mut(root, subtable_key)?;
                     let last_segment = key.last().unwrap();
                     if subtable.contains_key(last_segment) {
                         return Err(Error::Parse);
@@ -280,6 +283,7 @@ impl<'a> Parser<'a> {
                 Entry::Vacant(vacancy) => vacancy.insert(Value::Table(Table::new())).as_table_mut(),
                 Entry::Occupied(occupant) => match occupant.into_mut() {
                     Value::Table(table) => table,
+                    Value::Array(array) => array.last_mut().unwrap().as_table_mut(),
                     _ => return Err(Error::Parse),
                 },
             }
@@ -328,5 +332,28 @@ impl<'a> Parser<'a> {
             self.lexer.next(Context::default())?;
         }
         Ok(())
+    }
+
+    fn absolute_key_string(&self, base_key: &[String], rel_key: &[String]) -> Result<String> {
+        let mut string = String::new();
+        let mut table = self.root.as_table();
+        for segment in base_key
+            .iter()
+            .chain(rel_key.iter())
+            .collect::<Vec<&String>>()
+        {
+            table = match table.get(segment) {
+                Some(Value::Table(table)) => {
+                    string.push_str(&format!(".{segment}"));
+                    table
+                }
+                Some(Value::Array(array)) => {
+                    string.push_str(&format!(".{segment}.{}", array.len() - 1));
+                    array.last().unwrap().as_table()
+                }
+                _ => return Err(Error::Parse),
+            }
+        }
+        Ok(string)
     }
 }

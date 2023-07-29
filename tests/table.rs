@@ -178,10 +178,6 @@ fn redefine_3() -> Result<()> {
 [fruit]
 apple.color = "red"
 apple.taste.sweet = true
-
-# [fruit.apple]  # INVALID
-# [fruit.apple.taste]  # INVALID
-
 [fruit.apple.texture]  # you can add sub-tables
 smooth = true
 "#;
@@ -189,5 +185,30 @@ smooth = true
     assert_eq!(root["fruit"]["apple"]["color"].as_str(), "red");
     assert_eq!(root["fruit"]["apple"]["taste"]["sweet"].as_bool(), true);
     assert_eq!(root["fruit"]["apple"]["texture"]["smooth"].as_bool(), true);
+    Ok(())
+}
+
+#[test]
+fn redefine_4() -> Result<()> {
+    let text = r#"
+[fruit]
+apple.color = "red"
+apple.taste.sweet = true
+[fruit.apple]  # INVALID
+[fruit.apple.taste]  # INVALID
+"#;
+    let root = from_str(text);
+    assert!(root.is_err());
+    Ok(())
+}
+
+#[test]
+fn redefine_5() -> Result<()> {
+    let text = r#"
+[fruit]
+[fruit]
+"#;
+    let root = from_str(text);
+    assert!(root.is_err());
     Ok(())
 }

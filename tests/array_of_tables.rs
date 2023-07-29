@@ -94,6 +94,21 @@ name = "apple"
 }
 
 #[test]
+fn redefine_2() -> Result<()> {
+    let text = r#"
+# INVALID TOML DOC
+fruits = []
+
+[[fruits]] # Not allowed
+"#;
+    let root = from_str(text);
+
+    assert!(root.is_err());
+
+    Ok(())
+}
+
+#[test]
 fn redefine_3() -> Result<()> {
     let text = r#"
 # INVALID TOML DOC
@@ -153,6 +168,22 @@ points = [ { x = 1, y = 2, z = 3 },
     assert_eq!(root["points"][2]["x"].as_int(), 2);
     assert_eq!(root["points"][2]["y"].as_int(), 4);
     assert_eq!(root["points"][2]["z"].as_int(), 8);
+
+    Ok(())
+}
+
+#[test]
+fn inline_tables_2() -> Result<()> {
+    let text = r#"
+[[a]]
+
+[a.b.c]
+
+[[a]]
+
+[a.b.c]
+"#;
+    from_str(text)?;
 
     Ok(())
 }
