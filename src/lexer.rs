@@ -28,7 +28,7 @@ pub enum Token {
 
 #[derive(Clone)]
 pub enum Posture {
-    Key,
+    Any,
     Value,
 }
 
