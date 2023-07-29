@@ -75,6 +75,65 @@ name = "plantain"
 }
 
 #[test]
+fn redefine() -> Result<()> {
+    let text = r#"
+# INVALID TOML DOC
+[fruit.physical]  # subtable, but to which parent element should it belong?
+color = "red"
+shape = "round"
+
+[[fruit]]  # parser must throw an error upon discovering that "fruit" is
+           # an array rather than a table
+name = "apple"
+"#;
+    let root = from_str(text);
+
+    assert!(root.is_err());
+
+    Ok(())
+}
+
+#[test]
+fn redefine_3() -> Result<()> {
+    let text = r#"
+# INVALID TOML DOC
+[[fruits]]
+name = "apple"
+
+[[fruits.varieties]]
+name = "red delicious"
+
+# INVALID: This table conflicts with the previous array of tables
+[fruits.varieties]
+name = "granny smith"
+"#;
+    let root = from_str(text);
+
+    assert!(root.is_err());
+
+    Ok(())
+}
+
+#[test]
+fn redefine_4() -> Result<()> {
+    let text = r#"
+# INVALID TOML DOC
+[fruits.physical]
+color = "red"
+shape = "round"
+
+# INVALID: This array of tables conflicts with the previous table
+[[fruits.physical]]
+color = "green"
+"#;
+    let root = from_str(text);
+
+    assert!(root.is_err());
+
+    Ok(())
+}
+
+#[test]
 fn inline_tables() -> Result<()> {
     let text = r#"
 points = [ { x = 1, y = 2, z = 3 },
